@@ -1,0 +1,5 @@
+NAME="hos"
+ID=hos
+ID_LIKE=void
+PRETTY_NAME="hos linux"
+HOME_URL="https://github.com/42dotmk"

@@ -1,0 +1,7 @@
+
+hos linux \r (\l)
+
+    users: hos:hos (sudo, no password), root:hos
+    startx          hwm + hterm + hed and friends
+    /usr/src/hackable   every tool's source; edit, make, run
+

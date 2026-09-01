@@ -1,0 +1,37 @@
+# held back with xbps ignorepkg (mklive -g); one per line, # comments.
+# only things nothing on the ISO links against: xbps aborts the install
+# on an unresolvable shlib, so a linked library cannot be ignored.
+
+# base-system insists on a vi; hed is the editor
+nvi
+
+# OpenCL stack that MesaLib-devel drags in via gtk+3-devel: libclc,
+# libclang-cpp, clang headers, SPIRV translator — ~200M, unused
+mesa-opencl
+
+# doc generator behind libglib-devel; brings python3 + a dozen modules
+gi-docgen
+
+# gtk+3-devel wants the ISO country/language tables
+iso-codes
+
+# firmware for pre-2005 ISA/PCI sound cards (sof-firmware is what
+# modern intel audio needs, and it stays)
+alsa-firmware
+
+# git's perl bits (git-send-email, git-svn); everything else in git is C.
+# xbps won't hold back a package something links against, so the perl-*
+# modules that link libperl must go with it
+perl
+perl-Authen-SASL
+perl-Convert-BinHex
+perl-Crypt-URandom
+perl-Digest-HMAC
+perl-IO-Socket-SSL
+perl-IO-stringy
+perl-MailTools
+perl-MIME-tools
+perl-Net-SMTP-SSL
+perl-Net-SSLeay
+perl-TimeDate
+perl-URI

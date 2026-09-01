@@ -1,0 +1,51 @@
+# installed on top of base-system (mklive default); one per line, # comments
+# no vi, no vim, no editors but hed
+
+# X
+xorg-minimal
+xinit
+mesa-dri
+dejavu-fonts-ttf
+dbus
+NetworkManager
+
+# hackable tool runtime deps
+SDL2
+SDL2_ttf
+libXft
+fzf
+libwebkit2gtk41
+alsa-lib
+vulkan-loader
+
+# toolchain — /usr/src/hackable is meant to be rebuilt in place
+gcc
+make
+pkg-config
+git
+cmake
+
+# hed's optional helpers
+ripgrep
+tmux
+ctags
+
+# headers for rebuilding every tool on the running system
+libX11-devel
+libXrandr-devel
+libXrender-devel
+libXcomposite-devel
+libXdamage-devel
+libXfixes-devel
+libXtst-devel
+libXft-devel
+libinput-devel
+eudev-libudev-devel
+dbus-devel
+SDL2-devel
+SDL2_ttf-devel
+openssl-devel
+sqlite-devel
+alsa-lib-devel
+vulkan-loader-devel
+libwebkit2gtk41-devel

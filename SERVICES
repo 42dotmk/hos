@@ -1,0 +1,6 @@
+# runit services enabled in the ISO beyond base defaults; one per line
+# gettys: base-system enables tty1-6; overlay/etc/sv/agetty-tty{3..6}/down
+# masks all but tty1 and tty2
+udevd
+dbus
+NetworkManager
