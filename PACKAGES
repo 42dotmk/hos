@@ -25,6 +25,9 @@ pkg-config
 git
 cmake
 
+# branding: /etc/fastfetch/config.jsonc draws /usr/share/hos/logo.txt
+fastfetch
+
 # hed's optional helpers
 ripgrep
 tmux

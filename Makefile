@@ -22,6 +22,11 @@ FONTDIR = $(HOME)/.local/share/fonts
 FONTS   = IosevkaNerdFontMono-Regular.ttf IosevkaNerdFontMono-Bold.ttf \
           IosevkaNerdFontMono-Italic.ttf IosevkaNerdFontMono-BoldItalic.ttf
 
+# hbg's config.h reads ~/pictures/backgrounds/preffered; ship a few for
+# the live user (via /etc/skel) and root
+BGDIR   = pictures/backgrounds/preffered
+BGS     = planets.png planets2.jpeg 4lieves.png 3doyourwork.jpeg
+
 # build artifacts too big to ship; the sources stay, so it rebuilds in place
 RSYNC_EXCLUDES = --exclude=.git --exclude=/vendor/whisper.cpp/build
 
@@ -62,6 +67,12 @@ stage:
 	for f in $(FONTS); do \
 		cp $(FONTDIR)/$$f $(OVERLAY)$(FONTDIR)/ && \
 		cp $(FONTDIR)/$$f $(OVERLAY)/usr/share/fonts/hackable/ || exit 1; \
+	done
+	for h in etc/skel root; do \
+		mkdir -p $(OVERLAY)/$$h/$(BGDIR) && \
+		for b in $(BGS); do \
+			cp $(HOME)/$(BGDIR)/$$b $(OVERLAY)/$$h/$(BGDIR)/ || exit 1; \
+		done; \
 	done
 
 # paths must be absolute: xbps resolves a relative -c against the install

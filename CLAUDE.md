@@ -34,7 +34,10 @@ defaults), `IGNORE` (packages held back via xbps ignorepkg), and
   this: it locates `hweb-ext.so` next to the resolved binary.
 - Branding: `-T "hos linux"` for the boot menu; `overlay/etc/os-release`
   and `overlay/etc/issue` replace Void's (the overlay is copied after
-  mklive drops in its own `data/issue`). The live user is created at
+  mklive drops in its own `data/issue`). fastfetch reads `ID=hos` from
+  os-release for the OS line but has no logo for it and would fall back
+  to `ID_LIKE=void`'s, so `overlay/etc/fastfetch/config.jsonc` (the
+  system-wide config path) points it at `overlay/usr/share/hos/logo.txt`. The live user is created at
   boot by mklive's dracut module `dracut/vmklive/adduser.sh`, which
   hardcodes hostname `void-live` and password `voidlinux`; the Makefile
   seds those to `hos` once after cloning (`build/void-mklive/.hos-patched`
@@ -52,6 +55,11 @@ defaults), `IGNORE` (packages held back via xbps ignorepkg), and
   Iosevka files to the same path in the rootfs, plus
   `/usr/share/fonts/hackable` so fontconfig finds "Iosevka NFM" for
   htray/hnd/hmenu.
+- hbg's config.h reads `~/pictures/backgrounds/preffered`; stage copies
+  the `BGS` picks from the user's copy of that directory into
+  `/etc/skel` (so useradd -m gives the live user a set) and `/root`.
+  Keep it to a few small files — squashfs dedups the two copies, but
+  each pick still costs its size on the ISO.
 - The live session starts via `overlay/etc/skel/.xinitrc` (and
   `overlay/root/.xinitrc`): just `exec hwm` — hwm autostarts htray, hnd,
   and hbg itself.
