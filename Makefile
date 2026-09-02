@@ -16,6 +16,7 @@ OVERLAY = $(BUILD)/overlay
 CACHE   = $(BUILD)/xbps-cachedir-$(ARCH)
 SRC     = usr/src/hackable
 ISO     = hos-$(shell date +%Y%m%d)-$(ARCH).iso
+LOCALE  = en_US.UTF-8
 
 # hterm's config.h compiles in absolute paths to exactly these files
 FONTDIR = $(HOME)/.local/share/fonts
@@ -75,17 +76,33 @@ stage:
 		done; \
 	done
 
+# boot menu background (isolinux + grub), 640x480 like mklive's own;
+# drawn from the fastfetch logo so the two match
+splash.png: splash.py overlay/usr/share/hos/logo.txt
+	python3 splash.py $@
+
 # paths must be absolute: xbps resolves a relative -c against the install
 # rootdir, which for the target is inside the image tree — a relative
 # cache dir ends up on the ISO
-iso: $(MKLIVE)/.hos-patched stage
-	cd $(MKLIVE) && sudo ./mklive.sh -a $(ARCH) -T "hos linux" \
+iso: $(MKLIVE)/.hos-patched stage splash.png
+	cd $(MKLIVE) && sudo env SPLASH_IMAGE=$(CURDIR)/splash.png \
+		./mklive.sh -a $(ARCH) -T "hos linux" -l $(LOCALE) \
 		-p "$(call list,PACKAGES)" -S "$(call list,SERVICES)" \
 		-g "$(call list,IGNORE)" \
 		-C "live.user=hos live.autologin" \
 		-c $(CURDIR)/$(CACHE) -H $(CURDIR)/$(CACHE) \
 		-I $(CURDIR)/$(OVERLAY) -o $(CURDIR)/$(ISO)
 	sudo chown "$$(id -u):$$(id -g)" $(ISO)
+
+# brand the running machine like the ISO: fastfetch logo + config and
+# the hos os-release. Needs sudo, so the user runs it. /etc/os-release
+# is base-files' (a symlink to /usr/lib/os-release, not a conf file), so
+# a base-files update puts Void's back — rerun this after one.
+install-host:
+	sudo install -Dm644 overlay/usr/share/hos/logo.txt /usr/share/hos/logo.txt
+	sudo install -Dm644 overlay/etc/fastfetch/config.jsonc /etc/fastfetch/config.jsonc
+	sudo rm -f /etc/os-release
+	sudo install -m644 overlay/etc/os-release /etc/os-release
 
 qemu:
 	qemu-system-x86_64 -enable-kvm -m 4G -cdrom "$$(ls -t hos-*.iso | head -1)"
@@ -96,4 +113,4 @@ clean:
 distclean: clean
 	rm -f hos-*.iso
 
-.PHONY: all stage iso qemu clean distclean
+.PHONY: all stage iso install-host qemu clean distclean

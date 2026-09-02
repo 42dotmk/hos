@@ -1,6 +1,8 @@
 // system-wide fastfetch config for hos; ~/.config/fastfetch/config.jsonc
 // overrides it. /etc/os-release already names the distro, this only
 // swaps the logo (an unknown ID would fall back to ID_LIKE=void's).
+// "modules" is fastfetch's default list: a config without one prints
+// the logo and nothing else.
 {
   "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
   "logo": {
@@ -8,5 +10,11 @@
     "source": "/usr/share/hos/logo.txt",
     "color": { "1": "blue", "2": "white" },
     "padding": { "top": 1, "right": 3 }
-  }
+  },
+  "modules": [
+    "title", "separator", "os", "host", "kernel", "uptime", "packages",
+    "shell", "display", "de", "wm", "wmtheme", "theme", "icons", "font",
+    "cursor", "terminal", "terminalfont", "cpu", "gpu", "memory", "swap",
+    "disk", "localip", "battery", "poweradapter", "locale", "break", "colors"
+  ]
 }

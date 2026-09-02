@@ -37,7 +37,13 @@ defaults), `IGNORE` (packages held back via xbps ignorepkg), and
   mklive drops in its own `data/issue`). fastfetch reads `ID=hos` from
   os-release for the OS line but has no logo for it and would fall back
   to `ID_LIKE=void`'s, so `overlay/etc/fastfetch/config.jsonc` (the
-  system-wide config path) points it at `overlay/usr/share/hos/logo.txt`. The live user is created at
+  system-wide config path) points it at `overlay/usr/share/hos/logo.txt`.
+  That config must also carry the default `modules` list: a fastfetch
+  config without one prints the logo and nothing else. The boot menu
+  background is `splash.png`, rendered from the same logo by `splash.py`
+  (a Makefile rule) and handed to mklive via the `SPLASH_IMAGE` env var —
+  there is no CLI flag for it, hence `sudo env`. Locale is `-l $(LOCALE)`,
+  en_US.UTF-8 like the user's machine. The live user is created at
   boot by mklive's dracut module `dracut/vmklive/adduser.sh`, which
   hardcodes hostname `void-live` and password `voidlinux`; the Makefile
   seds those to `hos` once after cloning (`build/void-mklive/.hos-patched`
@@ -62,10 +68,12 @@ defaults), `IGNORE` (packages held back via xbps ignorepkg), and
   each pick still costs its size on the ISO.
 - The live session starts via `overlay/etc/skel/.xinitrc` (and
   `overlay/root/.xinitrc`): just `exec hwm` — hwm autostarts htray, hnd,
-  and hbg itself. `overlay/etc/profile.d/hos-startx.sh` runs startx from
-  the tty1 login shell (agetty autologin), not exec'd so an X exit drops
-  to a shell instead of relogging into X forever; tty2 stays a plain
-  login.
+  and hbg itself. `overlay/etc/profile.d/zz-hos-startx.sh` runs startx
+  from the tty1 login shell (agetty autologin), not exec'd so an X exit
+  drops to a shell instead of relogging into X forever; tty2 stays a
+  plain login. The `zz-` matters: /etc/profile sources profile.d in
+  name order and Void's `locale.sh` is what exports LANG, so a hook
+  sorting before it starts X in the C locale.
 - hwm's autostart list is spawned via `/bin/zsh -c`, so zsh must be in
   `PACKAGES` even though the login shell is bash — without it hbg,
   htray and hnd silently never start while launching them by hand works.
