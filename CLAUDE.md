@@ -62,7 +62,13 @@ defaults), `IGNORE` (packages held back via xbps ignorepkg), and
   each pick still costs its size on the ISO.
 - The live session starts via `overlay/etc/skel/.xinitrc` (and
   `overlay/root/.xinitrc`): just `exec hwm` — hwm autostarts htray, hnd,
-  and hbg itself.
+  and hbg itself. `overlay/etc/profile.d/hos-startx.sh` runs startx from
+  the tty1 login shell (agetty autologin), not exec'd so an X exit drops
+  to a shell instead of relogging into X forever; tty2 stays a plain
+  login.
+- hwm's autostart list is spawned via `/bin/zsh -c`, so zsh must be in
+  `PACKAGES` even though the login shell is bash — without it hbg,
+  htray and hnd silently never start while launching them by hand works.
 - Keep `PACKAGES` honest: runtime libs + toolchain + the -devel headers
   needed to rebuild every tool on the running system. No editors, no vi.
 - `IGNORE` is for dependency-chain fat only — never something a shipped

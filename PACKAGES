@@ -9,6 +9,15 @@ dejavu-fonts-ttf
 dbus
 NetworkManager
 
+# hwm's autostart runs its commands through /bin/zsh -c; without zsh
+# hbg/htray/hnd never start. The rest are what that list invokes.
+zsh
+setxkbmap
+xset
+picom
+xss-lock
+slock
+
 # hackable tool runtime deps
 SDL2
 SDL2_ttf
