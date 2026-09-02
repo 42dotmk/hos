@@ -9,8 +9,9 @@ dejavu-fonts-ttf
 dbus
 NetworkManager
 
-# hwm's autostart runs its commands through /bin/zsh -c; without zsh
-# hbg/htray/hnd never start. The rest are what that list invokes.
+# login shell (live.shell= on the cmdline, /etc/default/useradd for
+# installed systems); hwm's autostart also runs through /bin/zsh -c —
+# without it hbg/htray/hnd never start. The rest are what that list invokes.
 zsh
 setxkbmap
 xset
@@ -36,6 +37,10 @@ cmake
 
 # branding: /etc/fastfetch/config.jsonc draws /usr/share/hos/logo.txt
 fastfetch
+
+# fetching things
+curl
+wget
 
 # hed's optional helpers
 ripgrep

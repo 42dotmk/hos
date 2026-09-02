@@ -35,3 +35,14 @@ perl-Net-SMTP-SSL
 perl-Net-SSLeay
 perl-TimeDate
 perl-URI
+
+# -devel chain fat nothing on the ISO links against (found with a
+# dry-run closure, see CLAUDE.md): gtk+3's icon theme (hweb draws no
+# GTK icons), libsoup3-devel's vapi files (take vala with them), the
+# icu headers behind harfbuzz-devel (harfbuzz.pc doesn't require icu),
+# fftw behind libsamplerate-devel. Verify a hterm/hstt rebuild on the
+# ISO still works after touching this list.
+adwaita-icon-theme
+vala-devel
+icu-devel
+fftw-devel

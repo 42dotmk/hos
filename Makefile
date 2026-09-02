@@ -89,7 +89,7 @@ iso: $(MKLIVE)/.hos-patched stage splash.png
 		./mklive.sh -a $(ARCH) -T "hos linux" -l $(LOCALE) \
 		-p "$(call list,PACKAGES)" -S "$(call list,SERVICES)" \
 		-g "$(call list,IGNORE)" \
-		-C "live.user=hos live.autologin" \
+		-C "live.user=hos live.shell=/bin/zsh live.autologin" \
 		-c $(CURDIR)/$(CACHE) -H $(CURDIR)/$(CACHE) \
 		-I $(CURDIR)/$(OVERLAY) -o $(CURDIR)/$(ISO)
 	sudo chown "$$(id -u):$$(id -g)" $(ISO)

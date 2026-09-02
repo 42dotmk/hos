@@ -74,6 +74,11 @@ defaults), `IGNORE` (packages held back via xbps ignorepkg), and
   plain login. The `zz-` matters: /etc/profile sources profile.d in
   name order and Void's `locale.sh` is what exports LANG, so a hook
   sorting before it starts X in the C locale.
+- The login shell is zsh: `live.shell=/bin/zsh` on the cmdline for the
+  live user, `overlay/etc/default/useradd` for users created later.
+  `overlay/etc/skel/.zshrc` (and `root/.zshrc`) exist so a first login
+  gets a prompt instead of zsh-newuser-install. Void's zsh sources
+  /etc/profile from its zprofile, so profile.d (LANG, startx) still runs.
 - hwm's autostart list is spawned via `/bin/zsh -c`, so zsh must be in
   `PACKAGES` even though the login shell is bash — without it hbg,
   htray and hnd silently never start while launching them by hand works.
