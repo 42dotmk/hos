@@ -40,6 +40,9 @@ jobs:
       options: --privileged
       volumes:
         - /dev:/dev
+    defaults:
+      run:
+        shell: bash -e {0}  # the container's sh is dash
     steps:
       - name: Prepare container
         run: |
