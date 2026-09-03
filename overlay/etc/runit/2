@@ -1,0 +1,14 @@
+#!/bin/sh
+# runit stage 2 for a hos booted with runit as init (init=/sbin/init):
+# hsmd supervises /var/service in place of runsvdir.  The normal boot has
+# init=/usr/bin/hsmd on the kernel command line and never comes here.
+
+PATH=/usr/bin:/usr/sbin
+
+[ -x /etc/rc.local ] && /etc/rc.local
+
+# /var/service resolves through this link
+mkdir -p /run/runit/runsvdir
+ln -sfn /etc/runit/runsvdir/current /run/runit/runsvdir/current
+
+exec env - PATH=$PATH hsmd

@@ -1,0 +1,87 @@
+# Build the hos ISO and publish it as a GitHub release.
+#
+# Runs in void-mklive's own container (privileged: mklive chroots into
+# the rootfs and loop-mounts the EFI image), the way void-linux builds
+# its ISOs. Every sibling project is cloned from github.com/42dotmk —
+# all of them must be pushed there; fonts and backgrounds are vendored
+# in this repo. The version is the latest v* tag
+# bumped (patch by default; workflow_dispatch can pick minor/major),
+# and the release is created with that tag on the built commit.
+name: iso
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: version part to bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+
+concurrency:
+  group: iso
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  ORG: 42dotmk
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  iso:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/void-linux/void-mklive:20250227R1
+      options: --privileged
+      volumes:
+        - /dev:/dev
+    steps:
+      - name: Prepare container
+        run: |
+          xbps-install -Syu xbps && xbps-install -yu
+          xbps-install -y git rsync python3 curl tar xz github-cli
+          git config --global --add safe.directory '*'
+
+      - name: Clone hos
+        run: |
+          git clone "https://github.com/$GITHUB_REPOSITORY" "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" checkout "$GITHUB_SHA"
+          git -C "$GITHUB_WORKSPACE" fetch --tags
+
+      # what PACKAGES lists is by definition what rebuilding every tool needs
+      - name: Install build dependencies
+        run: xbps-install -y $(grep -v '^#' PACKAGES | tr '\n' ' ')
+
+      - name: Clone the hackable tools
+        run: |
+          for p in $(make -s print-projects); do
+            git clone --depth 1 --recurse-submodules --shallow-submodules \
+              "https://github.com/$ORG/$p" "../$p"
+          done
+
+      - name: Pick the version
+        run: |
+          last=$(git tag -l 'v*' --sort=-v:refname | head -1)
+          IFS=. read -r M m p <<< "${last#v}"
+          : "${M:=0}" "${m:=0}" "${p:=0}"
+          case "${{ inputs.bump || 'patch' }}" in
+            major) M=$((M + 1)); m=0; p=0 ;;
+            minor) m=$((m + 1)); p=0 ;;
+            *)     p=$((p + 1)) ;;
+          esac
+          echo "VERSION=v$M.$m.$p" | tee -a "$GITHUB_ENV"
+
+      - name: Build the ISO
+        run: make iso SUDO= VERSION="$VERSION"
+
+      - name: Release
+        run: |
+          iso="hos-$VERSION-x86_64.iso"
+          sha256sum "$iso" > "$iso.sha256"
+          gh release create "$VERSION" "$iso" "$iso.sha256" \
+            --target "$GITHUB_SHA" --title "hos $VERSION" --generate-notes

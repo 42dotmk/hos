@@ -47,6 +47,9 @@ ripgrep
 tmux
 ctags
 
+# file manager in the terminal (uses fzf/ripgrep above when present)
+yazi
+
 # headers for rebuilding every tool on the running system
 libX11-devel
 libXrandr-devel
@@ -66,3 +69,6 @@ sqlite-devel
 alsa-lib-devel
 vulkan-loader-devel
 libwebkit2gtk41-devel
+# hstt's whisper.cpp vulkan backend compiles shaders at build time
+shaderc
+SPIRV-Headers

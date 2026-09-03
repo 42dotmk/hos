@@ -1,0 +1,16 @@
+#!/bin/sh
+# hos stage 3: run by hsmd as pid 1 once every service is down, with the
+# pending action (poweroff, reboot or halt) as $1.  Void's shutdown tasks
+# in /etc/runit/shutdown.d do the rest; the one that stops runit services
+# is skipped because hsmd already stopped them.
+
+PATH=/usr/bin:/usr/sbin
+
+. /etc/runit/functions
+detect_container
+[ -r /etc/rc.conf ] && . /etc/rc.conf
+echo
+for f in /etc/runit/shutdown.d/*.sh; do
+    case $f in *-sv-stop.sh) continue ;; esac
+    [ -r $f ] && . $f
+done

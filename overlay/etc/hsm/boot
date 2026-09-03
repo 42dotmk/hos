@@ -1,0 +1,28 @@
+#!/bin/sh
+# hos stage 1: run by hsmd as pid 1 before it supervises anything.  Void's
+# one-time boot tasks (pseudo filesystems, udev, fsck and mount fstab,
+# swap, hostname, sysctl...) still live in /etc/runit/core-services; only
+# the script that creates runit's control files is skipped.
+
+PATH=/usr/bin:/usr/sbin
+
+. /etc/runit/functions
+
+msg "Welcome to hos!"
+
+[ -r /etc/rc.conf ] && . /etc/rc.conf
+
+detect_container
+for f in /etc/runit/core-services/*.sh; do
+    case $f in *-runit-control.sh) continue ;; esac
+    [ -r $f ] && . $f
+done
+
+# /var/service resolves through this link, which runit's stage 2 used to
+# create; keep it so hsmd, sv and people find the services where they expect
+mkdir -p /run/runit/runsvdir
+ln -sfn /etc/runit/runsvdir/current /run/runit/runsvdir/current
+
+[ -x /etc/rc.local ] && /etc/rc.local
+
+msg "Initialization complete, starting services..."

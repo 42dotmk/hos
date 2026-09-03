@@ -10,6 +10,7 @@ edit, make, run, on the running system.
     make            # hos-YYYYMMDD-x86_64.iso (the mklive step uses sudo)
     make stage      # just assemble what would land on the iso, no root
     make qemu       # boot the newest iso with kvm
+    make vmtest     # boot it headless, hsmd as init, check services/reboot/poweroff
 
 needs a void linux host with xbps, git, rsync, and the build deps of the
 tools themselves — the sibling trees are built in place first, then
@@ -20,6 +21,10 @@ downloads what changed.
 
 - base-system + xorg-minimal, dbus, networkmanager; gettys only on
   tty1/tty2
+- hsm as init: hsmd is pid 1, runs void's boot scripts, supervises the
+  usual /var/service and shuts the machine down; `hsm status`, `hsm
+  restart foo`, `sv check foo`, `poweroff`, `reboot` all work. runit
+  stays installed as a fallback (boot with init=/sbin/init)
 - every project from the hackable workspace under /usr/src/hackable
   (working-tree snapshot, no git history), binaries symlinked into /bin
 - gcc/make/pkg-config/git/cmake + the -devel headers each tool needs,
@@ -47,5 +52,6 @@ downloads what changed.
   fat nothing on the iso links against (OpenCL stack, python via
   gi-docgen, perl, nvi). all firmware stays, so it boots on any machine
 - `overlay/` — copied verbatim into the rootfs: os-release/issue
-  branding, the tty down files, .xinitrc, and a dracut drop-in that
+  branding, the tty down files, .xinitrc, hsm's boot/shutdown scripts
+  and the sv/halt/shutdown replacements, and a dracut drop-in that
   keeps GPU firmware out of the initramfs

@@ -4,10 +4,11 @@
 #                 mklive step runs under sudo)
 # make stage      assemble build/overlay only — sources, symlinks, fonts
 # make qemu       boot the newest ISO with kvm
+# make vmtest     boot it headless with a fresh hsmd injected, check init works
 # make clean      remove build/; distclean also removes ISOs
 
 HACKABLE = ..
-PROJECTS = hed hterm hwm hws htray hnd hmenu hsm hml hstt hweb hbg
+PROJECTS ?= hed hterm hwm hws htray hnd hmenu hsm hml hstt hweb hbg
 
 ARCH    = x86_64
 BUILD   = build
@@ -15,18 +16,23 @@ MKLIVE  = $(BUILD)/void-mklive
 OVERLAY = $(BUILD)/overlay
 CACHE   = $(BUILD)/xbps-cachedir-$(ARCH)
 SRC     = usr/src/hackable
-ISO     = hos-$(shell date +%Y%m%d)-$(ARCH).iso
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+ISO     = hos-$(VERSION)-$(ARCH).iso
 LOCALE  = en_US.UTF-8
+SUDO   ?= sudo  # empty when already root (CI container)
 
-# hterm's config.h compiles in absolute paths to exactly these files
-FONTDIR = $(HOME)/.local/share/fonts
+# hterm's config.h compiles in absolute paths to exactly these files, so
+# FONTDIR is where they must land on the ISO; they are vendored in fonts/
+FONTDIR = /home/halicea/.local/share/fonts
+FONTSRC ?= fonts
 FONTS   = IosevkaNerdFontMono-Regular.ttf IosevkaNerdFontMono-Bold.ttf \
           IosevkaNerdFontMono-Italic.ttf IosevkaNerdFontMono-BoldItalic.ttf
 
-# hbg's config.h reads ~/pictures/backgrounds/preffered; ship a few for
-# the live user (via /etc/skel) and root
+# hbg's config.h reads ~/pictures/backgrounds/preffered; ship backgrounds/
+# there for the live user (via /etc/skel) and root
 BGDIR   = pictures/backgrounds/preffered
-BGS     = planets.png planets2.jpeg 4lieves.png 3doyourwork.jpeg
+BGSRC  ?= backgrounds
+BGS     = $(notdir $(wildcard $(BGSRC)/*))
 
 # build artifacts too big to ship; the sources stay, so it rebuilds in place
 RSYNC_EXCLUDES = --exclude=.git --exclude=/vendor/whisper.cpp/build
@@ -66,15 +72,17 @@ stage:
 	done
 	mkdir -p $(OVERLAY)$(FONTDIR) $(OVERLAY)/usr/share/fonts/hackable
 	for f in $(FONTS); do \
-		cp $(FONTDIR)/$$f $(OVERLAY)$(FONTDIR)/ && \
-		cp $(FONTDIR)/$$f $(OVERLAY)/usr/share/fonts/hackable/ || exit 1; \
+		cp $(FONTSRC)/$$f $(OVERLAY)$(FONTDIR)/ && \
+		cp $(FONTSRC)/$$f $(OVERLAY)/usr/share/fonts/hackable/ || exit 1; \
 	done
 	for h in etc/skel root; do \
 		mkdir -p $(OVERLAY)/$$h/$(BGDIR) && \
 		for b in $(BGS); do \
-			cp $(HOME)/$(BGDIR)/$$b $(OVERLAY)/$$h/$(BGDIR)/ || exit 1; \
+			cp $(BGSRC)/$$b $(OVERLAY)/$$h/$(BGDIR)/ || exit 1; \
 		done; \
 	done
+	printf 'VERSION_ID=%s\nVERSION="%s"\n' "$(VERSION)" "$(VERSION)" \
+		>> $(OVERLAY)/etc/os-release
 
 # boot menu background (isolinux + grub), 640x480 like mklive's own;
 # drawn from the fastfetch logo so the two match
@@ -85,14 +93,17 @@ splash.png: splash.py overlay/usr/share/hos/logo.txt
 # rootdir, which for the target is inside the image tree — a relative
 # cache dir ends up on the ISO
 iso: $(MKLIVE)/.hos-patched stage splash.png
-	cd $(MKLIVE) && sudo env SPLASH_IMAGE=$(CURDIR)/splash.png \
+	cd $(MKLIVE) && $(SUDO) env SPLASH_IMAGE=$(CURDIR)/splash.png \
 		./mklive.sh -a $(ARCH) -T "hos linux" -l $(LOCALE) \
 		-p "$(call list,PACKAGES)" -S "$(call list,SERVICES)" \
 		-g "$(call list,IGNORE)" \
-		-C "live.user=hos live.shell=/bin/zsh live.autologin" \
+		-C "live.user=hos live.shell=/bin/zsh live.autologin init=/usr/bin/hsmd" \
 		-c $(CURDIR)/$(CACHE) -H $(CURDIR)/$(CACHE) \
 		-I $(CURDIR)/$(OVERLAY) -o $(CURDIR)/$(ISO)
-	sudo chown "$$(id -u):$$(id -g)" $(ISO)
+	$(SUDO) chown "$$(id -u):$$(id -g)" $(ISO)
+
+print-projects:
+	@echo $(PROJECTS)
 
 # brand the running machine like the ISO: fastfetch logo + config and
 # the hos os-release. Needs sudo, so the user runs it. /etc/os-release
@@ -105,7 +116,14 @@ install-host:
 	sudo install -m644 overlay/etc/os-release /etc/os-release
 
 qemu:
-	qemu-system-x86_64 -enable-kvm -m 4G -cdrom "$$(ls -t hos-*.iso | head -1)"
+	qemu-system-x86_64 -enable-kvm -cpu host -smp 4 -m 4G -cdrom "$$(ls -t hos-*.iso | head -1)"
+
+# boot the newest ISO headless with a fresh hsmd injected and check that
+# it works as init / as runit's stage 2 (see vmtest.py)
+vmtest:
+	python3 vmtest.py pid1
+	python3 vmtest.py reboot
+	python3 vmtest.py runit
 
 clean:
 	rm -rf $(BUILD)
@@ -113,4 +131,4 @@ clean:
 distclean: clean
 	rm -f hos-*.iso
 
-.PHONY: all stage iso install-host qemu clean distclean
+.PHONY: all stage iso install-host print-projects qemu vmtest clean distclean

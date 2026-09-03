@@ -1,0 +1,4 @@
+Iosevka Nerd Font Mono, from https://github.com/ryanoasis/nerd-fonts
+(Iosevka.tar.xz of a release; Iosevka is SIL OFL 1.1, the Nerd Fonts
+glyphs MIT). hterm compiles in these exact four files; the Makefile's
+FONTSRC points here by default.

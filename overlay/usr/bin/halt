@@ -1,0 +1,23 @@
+#!/bin/sh
+# halt / reboot / poweroff for hos.  Asks hsmd first (it is init on a normal
+# boot); when hos was booted with runit as init instead, fall back to
+# runit-init.  "-w" (write the wtmp record only, used by Void's shutdown
+# scripts) is a no-op here.
+
+case ${0##*/} in
+reboot) cmd=reboot ;;
+poweroff) cmd=poweroff ;;
+*) cmd=halt ;;
+esac
+for a; do
+    case $a in
+    -w) exit 0 ;;
+    -p) cmd=poweroff ;;
+    -r) cmd=reboot ;;
+    esac
+done
+hsm $cmd >/dev/null 2>&1 && exit 0
+case $cmd in
+reboot) exec runit-init 6 ;;
+*) exec runit-init 0 ;;
+esac

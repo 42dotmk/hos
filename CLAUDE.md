@@ -23,10 +23,43 @@ defaults), `IGNORE` (packages held back via xbps ignorepkg), and
   projects in place, snapshot their trees, plant the /usr/bin symlinks
   and fonts). No root; use it to inspect what would land on the ISO.
 - `make qemu` — boot the newest ISO with kvm.
+- `make vmtest` / `python3 vmtest.py pid1|reboot|runit` — boot the newest
+  ISO headless under qemu with a freshly built static hsmd and the
+  init-related overlay files injected (the initrd copies `/updates` over
+  the live root before pivoting, so no ISO rebuild and no root), and
+  drive the serial console: services up, `sv check`, restart, logs,
+  poweroff; a reboot cycle; and the runit-as-init fallback. Needs
+  isoinfo and /dev/kvm. Kernel, initrd and console logs land in
+  `build/vm/`.
+- Overridable knobs, all for CI: `SUDO=` when already root, `VERSION=`
+  (default `git describe`; names the ISO and lands in os-release as
+  VERSION_ID), `FONTSRC=` / `BGSRC=` (default the repo's vendored `fonts/` and
+  `backgrounds/`), `PROJECTS=`.
 - `make clean` / `make distclean` (also removes ISOs).
 
 ## Architecture
 
+- **hsmd is init.** The kernel command line (`-C` in the Makefile) ends
+  with `init=/usr/bin/hsmd`; dracut takes the last `init=` and hands the
+  rest of the command line to init as arguments (hsmd ignores them as
+  pid 1). hsmd runs `overlay/etc/hsm/boot` (Void's
+  `/etc/runit/core-services` minus the runit-control one, plus the
+  `/run/runit/runsvdir/current` link that `/var/service` resolves
+  through, plus rc.local), supervises `/var/service` — still runit's
+  layout, so `SERVICES` and `/etc/sv` are unchanged — and on
+  `hsm poweroff|reboot|halt` or ctrl-alt-del runs
+  `overlay/etc/hsm/shutdown` (Void's `shutdown.d` minus the `sv` stop)
+  and calls reboot(2). Service logs are under `/var/log/hsm/NAME/`.
+  Overlay replacements for runit's tools: `usr/bin/sv` (forwards to
+  `hsm`, which is what makes `sv check dbus` in Void's run scripts work),
+  `usr/bin/halt` (+ `reboot`/`poweroff` symlinks) and `usr/bin/shutdown`,
+  all of which fall back to `runit-init` when runit is pid 1. That
+  fallback is real: `overlay/etc/runit/2` makes hsmd runit's stage 2, so
+  booting with `init=/sbin/init` still gives a hos with hsm, and
+  `overlay/etc/runit/shutdown.d/10-sv-stop.sh` is neutralized for it.
+  These overlay files overwrite package-owned ones (runit, runit-void);
+  on the ISO that is fine, on an installed system a package update
+  restores them until hos ships its own package.
 - Sibling projects are built in their own trees first, then rsynced
   (minus `.git` and hstt's `vendor/whisper.cpp/build`) into the overlay
   at `usr/src/hackable/<p>`; `/usr/bin` symlinks point into those trees,
@@ -58,7 +91,7 @@ defaults), `IGNORE` (packages held back via xbps ignorepkg), and
   firmware into the initramfs where a live ISO never needs it.
 - hterm's config.h compiles in absolute font paths under
   `/home/halicea/.local/share/fonts`; stage copies exactly those four
-  Iosevka files to the same path in the rootfs, plus
+  Iosevka files (vendored in `fonts/`) to the same path in the rootfs, plus
   `/usr/share/fonts/hackable` so fontconfig finds "Iosevka NFM" for
   htray/hnd/hmenu.
 - hbg's config.h reads `~/pictures/backgrounds/preffered`; stage copies
@@ -94,3 +127,10 @@ defaults), `IGNORE` (packages held back via xbps ignorepkg), and
   `.xbps` files on the ISO that way.
 - This repo is NOT in the root Makefile's PROJECTS fan-out on purpose —
   an ISO build wants sudo and network, so it stays manual.
+- `.github/workflows/iso.yml` builds and releases the ISO on every push
+  to main (and on dispatch, with a major/minor/patch choice). It runs in
+  void-mklive's own privileged container like Void's CI, installs
+  `PACKAGES` as the build deps, clones every project in `PROJECTS` from
+  github.com/42dotmk (so all of them must be pushed there), bumps the latest `v*` tag
+  and creates the release with `gh`. A build is ~1.7G, so releases are
+  the distribution channel, not artifacts.

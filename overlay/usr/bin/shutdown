@@ -1,0 +1,19 @@
+#!/bin/sh
+# shutdown(8) lookalike for hos: -r reboots, -H halts, anything else (-h,
+# -P) powers off, through the halt script next to this one.  Only "now".
+
+cmd=poweroff
+while getopts hPrHkct: opt; do
+    case $opt in
+    r) cmd=reboot ;;
+    H) cmd=halt ;;
+    h | P) cmd=poweroff ;;
+    k | c) exit 0 ;;
+    esac
+done
+shift $((OPTIND - 1))
+if [ "$1" != now ]; then
+    echo "usage: ${0##*/} [-hPrH] now" >&2
+    exit 1
+fi
+exec $cmd
