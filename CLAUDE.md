@@ -22,7 +22,10 @@ defaults), `IGNORE` (packages held back via xbps ignorepkg), and
 - `make stage` — assemble `build/overlay` only (build all sibling
   projects in place, snapshot their trees, plant the /usr/bin symlinks
   and fonts). No root; use it to inspect what would land on the ISO.
-- `make qemu` — boot the newest ISO with kvm.
+- `make qemu` — boot the newest ISO with kvm, 4 cpus, 4G, on a virtio-vga
+  whose preferred mode is the host's primary monitor resolution (xrandr;
+  1920x1080 without X), so console and X come up at native size instead
+  of the emulated VGA's 1280x800.
 - `make vmtest` / `python3 vmtest.py pid1|reboot|runit` — boot the newest
   ISO headless under qemu with a freshly built static hsmd and the
   init-related overlay files injected (the initrd copies `/updates` over

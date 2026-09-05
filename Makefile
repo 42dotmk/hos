@@ -115,8 +115,18 @@ install-host:
 	sudo rm -f /etc/os-release
 	sudo install -m644 overlay/etc/os-release /etc/os-release
 
+# virtio-vga advertises xres/yres as the display's preferred mode, so the
+# guest (console and X alike) comes up at the host monitor's resolution
+# instead of the emulated VGA's fixed 1280x800; falls back to 1920x1080
+# when there is no X to ask
+RES = $(shell xrandr --current 2>/dev/null | awk '/ connected primary/ {print $$4}' | cut -d+ -f1)
+XRES = $(word 1,$(subst x, ,$(if $(RES),$(RES),1920x1080)))
+YRES = $(word 2,$(subst x, ,$(if $(RES),$(RES),1920x1080)))
+
 qemu:
-	qemu-system-x86_64 -enable-kvm -cpu host -smp 4 -m 4G -cdrom "$$(ls -t hos-*.iso | head -1)"
+	qemu-system-x86_64 -enable-kvm -cpu host -smp 4 -m 4G \
+		-device virtio-vga,xres=$(XRES),yres=$(YRES) \
+		-cdrom "$$(ls -t hos-*.iso | head -1)"
 
 # boot the newest ISO headless with a fresh hsmd injected and check that
 # it works as init / as runit's stage 2 (see vmtest.py)
