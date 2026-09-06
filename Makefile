@@ -8,7 +8,7 @@
 # make clean      remove build/; distclean also removes ISOs
 
 HACKABLE = ..
-PROJECTS ?= hed hterm hwm hws htray hnd hmenu hsm hml hstt hweb hbg
+PROJECTS ?= hed hterm hwm hws htray hnd hmenu hsm hml hstt hweb hbg hal
 
 ARCH    = x86_64
 BUILD   = build
@@ -64,6 +64,7 @@ stage:
 		case $$p in \
 		hed) bins="build/hed build/tsi" ;; \
 		hsm) bins="hsmd hsm" ;; \
+		hal) bins="hald hal" ;; \
 		*)   bins="$$p" ;; \
 		esac; \
 		for b in $$bins; do \

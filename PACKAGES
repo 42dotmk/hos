@@ -65,6 +65,7 @@ dbus-devel
 SDL2-devel
 SDL2_ttf-devel
 openssl-devel
+libcurl-devel
 sqlite-devel
 alsa-lib-devel
 vulkan-loader-devel
