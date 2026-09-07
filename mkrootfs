@@ -1,0 +1,145 @@
+#!/bin/sh
+# mkrootfs - assemble the hos root filesystem in a directory.
+#
+#   mkrootfs install ROOTFS CACHE   xbps-install PACKAGES (minus IGNORE) from
+#                                   the Void repos into a fresh ROOTFS; the
+#                                   package cache in CACHE survives rebuilds
+#   mkrootfs stage ROOTFS           everything on top, idempotent: overlay/,
+#                                   the tools' packages from REPODIR and their
+#                                   trees, the init for hos-mkinitramfs, fonts,
+#                                   backgrounds, locale, the live user, the
+#                                   enabled services, the version
+#
+# Runs as root: the real one (CI) or a user namespace's (the Makefile wraps
+# it in unshare --map-auto). Knobs come from the environment: HACKABLE
+# (the workspace, ..), PROJECTS, VERSION, LOCALE, REPO, REPODIR, FONTSRC, BGSRC.
+set -e
+
+: "${HACKABLE:=..}" "${LOCALE:=en_US.UTF-8}" "${VERSION:=dev}"
+: "${REPO:=https://repo-default.voidlinux.org/current}"
+: "${FONTSRC:=fonts}" "${BGSRC:=backgrounds}" "${PROJECTS:=}" "${REPODIR:=build/repo}"
+list() { grep -v '^#' "$1" | grep -v '^$' | tr '\n' ' '; }
+die() { echo "mkrootfs: $*" >&2; exit 1; }
+
+cmd=$1 rootfs=$2
+[ -n "$rootfs" ] || die "usage: mkrootfs install ROOTFS CACHE | stage ROOTFS"
+[ "$(id -u)" -eq 0 ] || die "run as root, or under unshare --map-auto (see the Makefile)"
+case $rootfs in /*) ;; *) rootfs=$PWD/$rootfs ;; esac
+case $REPODIR in /*) ;; *) REPODIR=$PWD/$REPODIR ;; esac
+
+# xbps runs package scripts chrooted into the rootfs; they want /dev, /proc
+# and /sys. Bound for the duration: in a user namespace the mounts die
+# with it, as real root the trap undoes them.
+bindfs() {
+    for d in dev proc sys; do
+        mkdir -p "$rootfs/$d"
+        mountpoint -q "$rootfs/$d" || mount --rbind "/$d" "$rootfs/$d"
+    done
+    trap 'for d in dev proc sys; do umount -l "$rootfs/$d" 2>/dev/null; done' EXIT
+}
+
+# (named do_*: a function called install would shadow coreutils' install,
+# which stage uses - and did, once, wiping the rootfs through the binds)
+do_install() {
+    cache=$3
+    [ -n "$cache" ] || die "install needs a CACHE dir"
+    case $cache in /*) ;; *) cache=$PWD/$cache ;; esac
+    for d in dev proc sys; do
+        ! mountpoint -q "$rootfs/$d" || die "$rootfs/$d is a mount point, refusing to remove the rootfs"
+    done
+    rm -rf "$rootfs"
+    mkdir -p "$rootfs/var/db/xbps/keys" "$rootfs/etc/xbps.d" "$cache"
+    # the repo keys, so the first sync needs no prompt; xbps ships them
+    cp /var/db/xbps/keys/*.plist "$rootfs/var/db/xbps/keys/"
+    for p in $(list IGNORE); do echo "ignorepkg=$p"; done > "$rootfs/etc/xbps.d/00-hos-ignore.conf"
+    bindfs
+    XBPS_ARCH=x86_64 xbps-install -y -S -r "$rootfs" -c "$cache" \
+        -R "$REPO" -R "$REPO/nonfree" $(list PACKAGES)
+    # runit-void's files hos replaces: none installed, so nothing to fight;
+    # base-files' rc.conf & co come from overlay/ in stage
+    echo "mkrootfs: $(xbps-query -r "$rootfs" -l | wc -l) packages in $rootfs"
+}
+
+do_stage() {
+    [ -d "$rootfs/usr/bin" ] || die "$rootfs: no rootfs, run install first"
+    bindfs
+
+    echo "mkrootfs: overlay"
+    cp -a overlay/. "$rootfs/"
+    if ! grep -q "^$LOCALE " "$rootfs/etc/default/libc-locales" 2>/dev/null; then
+        sed -i "s/^#\($LOCALE \)/\1/" "$rootfs/etc/default/libc-locales"
+        chroot "$rootfs" xbps-reconfigure -f glibc-locales >/dev/null
+    fi
+    echo "LANG=$LOCALE" > "$rootfs/etc/locale.conf"
+
+    # every hackable tool comes in as a package from the repository mkpkg
+    # built (-i: the overlay's xbps.d names the remote hos repository,
+    # which is not consulted here; -f: a rebuilt package keeps its version,
+    # so reinstall). The remote repository's key is trusted up front so
+    # xbps-install -Su on the installed system needs no prompt.
+    echo "mkrootfs: packages"
+    [ -f "$REPODIR/$(uname -m)-repodata" ] || die "$REPODIR: no repository, run make packages"
+    find "$rootfs/usr/bin" -lname '/usr/src/hackable/*' -delete
+    XBPS_ARCH=x86_64 xbps-install -y -f -i -r "$rootfs" -R "$REPODIR" $PROJECTS hackable-fonts
+    keyfp=$(ssh-keygen -i -m PKCS8 -f hos-repo.pub | ssh-keygen -l -E md5 -f /dev/stdin | sed 's/.*MD5:\([0-9a-f:]*\).*/\1/')
+    python3 -c 'import plistlib,sys; plistlib.dump({"public-key": open(sys.argv[1],"rb").read(),
+        "public-key-size": 4096, "signature-by": "hos"}, open(sys.argv[2],"wb"))' \
+        hos-repo.pub "$rootfs/var/db/xbps/keys/$keyfp.plist"
+
+    # and its working tree (minus .git and hstt's 379M whisper build dir)
+    # at /usr/src/hackable/<p>, to hack on in place: make there, make
+    # install symlinks into ~/.local/bin, which shadows the package. hos
+    # itself goes too (minus build/ and ISOs): the recipe, and the init's
+    # source.
+    src=usr/src/hackable
+    mkdir -p "$rootfs/$src"
+    for p in $PROJECTS hos; do
+        rsync -a --delete --exclude=.git --exclude=/vendor/whisper.cpp/build \
+            --exclude=/build --exclude='*.iso' "$HACKABLE/$p/" "$rootfs/$src/$p/"
+    done
+    # what hos-mkinitramfs packs, built here from init/
+    install -Dm755 init/init "$rootfs/usr/lib/hos/init"
+
+    # hterm's config.h compiles in absolute font paths under this dir, so
+    # the iso carries it; /usr/share/fonts/hackable is for fontconfig
+    fontdir=/home/halicea/.local/share/fonts
+    mkdir -p "$rootfs$fontdir" "$rootfs/usr/share/fonts/hackable"
+    for f in "$FONTSRC"/*; do
+        cp "$f" "$rootfs$fontdir/"
+        cp "$f" "$rootfs/usr/share/fonts/hackable/"
+    done
+    # hbg reads ~/pictures/backgrounds/preffered: give skel and root a set
+    for h in etc/skel root; do
+        mkdir -p "$rootfs/$h/pictures/backgrounds/preffered"
+        cp "$BGSRC"/* "$rootfs/$h/pictures/backgrounds/preffered/"
+    done
+
+    # the live user, baked in: hos:hos with passwordless sudo, root:hos;
+    # /etc/default/live.conf tells hos-install whom to remove
+    if ! chroot "$rootfs" id hos >/dev/null 2>&1; then
+        groups=$(for g in wheel audio video input storage optical network kvm users; do
+            grep -q "^$g:" "$rootfs/etc/group" && printf '%s,' "$g"; done)
+        chroot "$rootfs" useradd -m -G "${groups%,}" -s /bin/zsh hos
+    fi
+    printf 'root:hos\nhos:hos\n' | chroot "$rootfs" chpasswd
+    printf 'hos ALL=(ALL:ALL) NOPASSWD: ALL\n' > "$rootfs/etc/sudoers.d/99-hos"
+    chmod 440 "$rootfs/etc/sudoers.d/99-hos"
+    echo USERNAME=hos > "$rootfs/etc/default/live.conf"
+
+    # /var/service: what hsmd supervises (runit's layout, sv reads it too)
+    rm -rf "$rootfs/var/service"
+    mkdir -p "$rootfs/var/service"
+    for s in $(list SERVICES); do
+        [ -x "$rootfs/etc/sv/$s/run" ] || die "SERVICES: no /etc/sv/$s/run in the rootfs"
+        ln -s "/etc/sv/$s" "$rootfs/var/service/$s"
+    done
+
+    sed -i '/^VERSION/d' "$rootfs/etc/os-release"
+    printf 'VERSION_ID=%s\nVERSION="%s"\n' "$VERSION" "$VERSION" >> "$rootfs/etc/os-release"
+    echo "mkrootfs: staged $VERSION into $rootfs"
+}
+
+case $cmd in
+install | stage) "do_$cmd" "$@" ;;
+*) die "unknown command $cmd" ;;
+esac

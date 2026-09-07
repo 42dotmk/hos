@@ -1,0 +1,6 @@
+# hos: the default interactive zsh config, read before ~/.zshrc.
+# One concern per file in /etc/zsh/zshrc.d; override anything in ~/.zshrc.
+for f in /etc/zsh/zshrc.d/*.zsh(N); do
+    source "$f"
+done
+unset f

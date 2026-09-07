@@ -1,107 +1,82 @@
-# hos — bootable Void Linux ISO carrying the hackable tools.
+# hos — the hackable distribution as a bootable ISO: a root filesystem
+# from the Void repositories (xbps) with the hackable tools staged into it,
+# hos's own init in an initramfs it builds itself, hsmd as pid 1, and a
+# grub boot menu, packed by grub-mkrescue.
 #
-# make            build the ISO (fetches void-mklive on first run; the
-#                 mklive step runs under sudo)
-# make stage      assemble build/overlay only — sources, symlinks, fonts
+# make            build the ISO (rootfs if needed, stage, initramfs, iso)
+# make rootfs     xbps-install PACKAGES into build/rootfs (network; once)
+# make packages   build the tools, pack them as xbps packages into build/repo
+# make stage      overlay, packages, sources, fonts, user, services into the rootfs
+# make initramfs  build/initramfs from init/ and the rootfs's modules
 # make qemu       boot the newest ISO with kvm
 # make vmtest     boot it headless with a fresh hsmd injected, check init works
+# make sign       sign build/repo with KEY (the private key CI holds as a secret)
 # make clean      remove build/; distclean also removes ISOs
+#
+# No sudo: everything that needs root runs in a user namespace (unshare
+# --map-auto, which wants a /etc/subuid line for you); as real root (CI)
+# it runs directly. Needs xbps, rsync, cpio, zstd, squashfs-tools, grub,
+# grub-x86_64-efi, xorriso, mtools, python3 (splash) and the tools' deps.
 
 HACKABLE = ..
-PROJECTS ?= hed hterm hwm hws htray hnd hmenu hsm hml hstt hweb hbg hal
+PROJECTS ?= hed hterm hwm hws htray hnd hmenu hsm hml hstt hweb hbg hai
 
-ARCH    = x86_64
-BUILD   = build
-MKLIVE  = $(BUILD)/void-mklive
-OVERLAY = $(BUILD)/overlay
-CACHE   = $(BUILD)/xbps-cachedir-$(ARCH)
-SRC     = usr/src/hackable
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-ISO     = hos-$(VERSION)-$(ARCH).iso
-LOCALE  = en_US.UTF-8
-SUDO   ?= sudo  # empty when already root (CI container)
-
-# hterm's config.h compiles in absolute paths to exactly these files, so
-# FONTDIR is where they must land on the ISO; they are vendored in fonts/
-FONTDIR = /home/halicea/.local/share/fonts
-FONTSRC ?= fonts
-FONTS   = IosevkaNerdFontMono-Regular.ttf IosevkaNerdFontMono-Bold.ttf \
-          IosevkaNerdFontMono-Italic.ttf IosevkaNerdFontMono-BoldItalic.ttf
-
-# hbg's config.h reads ~/pictures/backgrounds/preffered; ship backgrounds/
-# there for the live user (via /etc/skel) and root
-BGDIR   = pictures/backgrounds/preffered
-BGSRC  ?= backgrounds
-BGS     = $(notdir $(wildcard $(BGSRC)/*))
-
-# build artifacts too big to ship; the sources stay, so it rebuilds in place
-RSYNC_EXCLUDES = --exclude=.git --exclude=/vendor/whisper.cpp/build
-
-# PACKAGES / SERVICES / IGNORE: one name per line, # comments
-list = $$(grep -v '^\#' $(CURDIR)/$(1) | tr '\n' ' ')
+ARCH      = x86_64
+BUILD     = build
+ROOTFS    = $(BUILD)/rootfs
+CACHE     = $(BUILD)/xbps-cache
+INITRAMFS = $(BUILD)/initramfs
+REPODIR   = $(BUILD)/repo
+ISODIR    = $(BUILD)/iso
+VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+ISO       = hos-$(VERSION)-$(ARCH).iso
+LOCALE    = en_US.UTF-8
+REPO     ?= https://repo-default.voidlinux.org/current
+FONTSRC  ?= fonts
+BGSRC    ?= backgrounds
+NS       ?= $(shell [ "$$(id -u)" = 0 ] || echo unshare --user --map-root-user --map-auto --mount)
+export HACKABLE PROJECTS VERSION LOCALE REPO FONTSRC BGSRC REPODIR
 
 all: iso
 
-$(MKLIVE)/mklive.sh:
-	mkdir -p $(BUILD)
-	git clone --depth 1 https://github.com/void-linux/void-mklive $(MKLIVE)
+init/init: init/init.c init/config.h
+	$(MAKE) -C init
 
-# the live user is created at boot by mklive's dracut module, which
-# hardcodes the void-live hostname and the voidlinux passwords
-$(MKLIVE)/.hos-patched: $(MKLIVE)/mklive.sh
-	sed -i 's/void-live/hos/g; s/voidlinux/hos/g' $(MKLIVE)/dracut/vmklive/adduser.sh
-	touch $@
-
-stage:
+projects:
 	for p in $(PROJECTS); do $(MAKE) -C $(HACKABLE)/$$p || exit 1; done
-	rm -rf $(OVERLAY)
-	mkdir -p $(OVERLAY)/$(SRC) $(OVERLAY)/usr/bin
-	cp -a overlay/. $(OVERLAY)/
-	for p in $(PROJECTS); do \
-		rsync -a $(RSYNC_EXCLUDES) $(HACKABLE)/$$p/ $(OVERLAY)/$(SRC)/$$p/ || exit 1; \
-	done
-	for p in $(PROJECTS); do \
-		case $$p in \
-		hed) bins="build/hed build/tsi" ;; \
-		hsm) bins="hsmd hsm" ;; \
-		hal) bins="hald hal" ;; \
-		*)   bins="$$p" ;; \
-		esac; \
-		for b in $$bins; do \
-			ln -sfn /$(SRC)/$$p/$$b $(OVERLAY)/usr/bin/$${b##*/} || exit 1; \
-		done; \
-	done
-	mkdir -p $(OVERLAY)$(FONTDIR) $(OVERLAY)/usr/share/fonts/hackable
-	for f in $(FONTS); do \
-		cp $(FONTSRC)/$$f $(OVERLAY)$(FONTDIR)/ && \
-		cp $(FONTSRC)/$$f $(OVERLAY)/usr/share/fonts/hackable/ || exit 1; \
-	done
-	for h in etc/skel root; do \
-		mkdir -p $(OVERLAY)/$$h/$(BGDIR) && \
-		for b in $(BGS); do \
-			cp $(BGSRC)/$$b $(OVERLAY)/$$h/$(BGDIR)/ || exit 1; \
-		done; \
-	done
-	printf 'VERSION_ID=%s\nVERSION="%s"\n' "$(VERSION)" "$(VERSION)" \
-		>> $(OVERLAY)/etc/os-release
 
-# boot menu background (isolinux + grub), 640x480 like mklive's own;
-# drawn from the fastfetch logo so the two match
+# the package install is the slow, network-bound step: once, then only when
+# the lists change. Everything else is re-staged on top every build.
+$(ROOTFS)/.installed: PACKAGES IGNORE mkrootfs
+	$(NS) sh -c './mkrootfs install $(ROOTFS) $(CACHE) && touch $@'
+
+rootfs: $(ROOTFS)/.installed
+
+# the tools as xbps packages (mkpkg builds them, in their trees, as the
+# user): what stage installs into the rootfs, what CI signs and publishes
+packages: rootfs
+	./mkpkg $(ROOTFS) $(REPODIR)
+
+# the repository signature, and one per package; KEY is the private half
+# of hos-repo.pub (CI: the XBPS_PRIVKEY secret). Remote repos must be signed.
+sign:
+	test -n "$(KEY)" || { echo "make sign KEY=/path/to/private.pem"; exit 1; }
+	xbps-rindex --privkey $(KEY) --signedby "hos" --sign $(REPODIR)
+	xbps-rindex --privkey $(KEY) --signedby "hos" --sign-pkg $(REPODIR)/*.xbps
+
+stage: packages init/init
+	$(NS) ./mkrootfs stage $(ROOTFS)
+
+initramfs: stage
+	$(NS) sh -c 'overlay/usr/bin/hos-mkinitramfs -i init/init \
+		-m $(ROOTFS)/lib/modules/* -o $(INITRAMFS) $$(ls $(ROOTFS)/lib/modules)'
+
+# boot menu background (640x480), drawn from the fastfetch logo so the two match
 splash.png: splash.py overlay/usr/share/hos/logo.txt
 	python3 splash.py $@
 
-# paths must be absolute: xbps resolves a relative -c against the install
-# rootdir, which for the target is inside the image tree — a relative
-# cache dir ends up on the ISO
-iso: $(MKLIVE)/.hos-patched stage splash.png
-	cd $(MKLIVE) && $(SUDO) env SPLASH_IMAGE=$(CURDIR)/splash.png \
-		./mklive.sh -a $(ARCH) -T "hos linux" -l $(LOCALE) \
-		-p "$(call list,PACKAGES)" -S "$(call list,SERVICES)" \
-		-g "$(call list,IGNORE)" \
-		-C "live.user=hos live.shell=/bin/zsh live.autologin init=/usr/bin/hsmd" \
-		-c $(CURDIR)/$(CACHE) -H $(CURDIR)/$(CACHE) \
-		-I $(CURDIR)/$(OVERLAY) -o $(CURDIR)/$(ISO)
-	$(SUDO) chown "$$(id -u):$$(id -g)" $(ISO)
+iso: initramfs splash.png
+	$(NS) ./mkiso $(ROOTFS) $(INITRAMFS) $(ISODIR) $(ISO)
 
 print-projects:
 	@echo $(PROJECTS)
@@ -130,16 +105,17 @@ qemu:
 		-cdrom "$$(ls -t hos-*.iso | head -1)"
 
 # boot the newest ISO headless with a fresh hsmd injected and check that
-# it works as init / as runit's stage 2 (see vmtest.py)
+# it works as init (see vmtest.py)
 vmtest:
 	python3 vmtest.py pid1
 	python3 vmtest.py reboot
-	python3 vmtest.py runit
 
+# build/ is owned by the namespace's root (subuids), so it is removed there
 clean:
-	rm -rf $(BUILD)
+	$(NS) rm -rf $(BUILD)
+	$(MAKE) -C init clean
 
 distclean: clean
 	rm -f hos-*.iso
 
-.PHONY: all stage iso install-host print-projects qemu vmtest clean distclean
+.PHONY: all projects rootfs packages sign stage initramfs iso install-host print-projects qemu vmtest clean distclean

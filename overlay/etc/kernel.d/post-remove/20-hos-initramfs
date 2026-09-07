@@ -1,0 +1,3 @@
+#!/bin/sh
+# hos: drop the initramfs of a removed kernel
+rm -f "/boot/initramfs-$2.img"

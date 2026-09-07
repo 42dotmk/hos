@@ -1,12 +1,16 @@
-# Build the hos ISO and publish it as a GitHub release.
+# Build the hos ISO and publish it as a GitHub release; build the hackable
+# tools as xbps packages, sign them and publish the repository to GitHub
+# Pages (https://42dotmk.github.io/hos, what /etc/xbps.d on the ISO names).
 #
-# Runs in void-mklive's own container (privileged: mklive chroots into
-# the rootfs and loop-mounts the EFI image), the way void-linux builds
-# its ISOs. Every sibling project is cloned from github.com/42dotmk —
-# all of them must be pushed there; fonts and backgrounds are vendored
-# in this repo. The version is the latest v* tag
-# bumped (patch by default; workflow_dispatch can pick minor/major),
-# and the release is created with that tag on the built commit.
+# Runs as root in Void's own container (privileged: mkrootfs bind-mounts
+# /dev, /proc and /sys into the rootfs for the package hooks, which
+# chroot). Every sibling project is cloned from github.com/42dotmk — all
+# of them must be pushed there; fonts and backgrounds are vendored in this
+# repo. The version is the latest v* tag bumped (patch by default;
+# workflow_dispatch can pick minor/major), and the release is created with
+# that tag on the built commit. The repository signature needs the
+# XBPS_PRIVKEY secret: the private half of hos-repo.pub (PEM); Pages must
+# be set to deploy from GitHub Actions.
 name: iso
 
 on:
@@ -27,6 +31,8 @@ concurrency:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 env:
   ORG: 42dotmk
@@ -36,7 +42,7 @@ jobs:
   iso:
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/void-linux/void-mklive:20250227R1
+      image: ghcr.io/void-linux/void-glibc-full:latest
       options: --privileged
       volumes:
         - /dev:/dev
@@ -47,7 +53,8 @@ jobs:
       - name: Prepare container
         run: |
           xbps-install -Syu xbps && xbps-install -yu
-          xbps-install -y git rsync python3 curl tar xz github-cli
+          xbps-install -y git rsync python3 curl tar xz github-cli \
+            cpio zstd squashfs-tools grub grub-x86_64-efi xorriso mtools
           git config --global --add safe.directory '*'
 
       - name: Clone hos
@@ -60,12 +67,19 @@ jobs:
       - name: Install build dependencies
         run: xbps-install -y $(grep -v '^#' PACKAGES | tr '\n' ' ')
 
+      # a project not (yet) on github is left out of this build, loudly
       - name: Clone the hackable tools
         run: |
+          projects=
           for p in $(make -s print-projects); do
-            git clone --depth 1 --recurse-submodules --shallow-submodules \
-              "https://github.com/$ORG/$p" "../$p"
+            if git clone --recurse-submodules --shallow-submodules \
+                "https://github.com/$ORG/$p" "../$p"; then
+              projects="$projects $p"
+            else
+              echo "::warning::$ORG/$p: clone failed, left out of this build"
+            fi
           done
+          echo "PROJECTS=${projects# }" | tee -a "$GITHUB_ENV"
 
       - name: Pick the version
         run: |
@@ -80,7 +94,23 @@ jobs:
           echo "VERSION=v$M.$m.$p" | tee -a "$GITHUB_ENV"
 
       - name: Build the ISO
-        run: make iso SUDO= VERSION="$VERSION"
+        run: make iso VERSION="$VERSION"
+
+      - name: Sign the package repository
+        env:
+          XBPS_PRIVKEY: ${{ secrets.XBPS_PRIVKEY }}
+        run: |
+          test -n "$XBPS_PRIVKEY" || { echo "::error::no XBPS_PRIVKEY secret, the repository would be unsigned"; exit 1; }
+          umask 077; printf '%s\n' "$XBPS_PRIVKEY" > /tmp/key.pem
+          make sign KEY=/tmp/key.pem
+          rm -f /tmp/key.pem
+          cp pages/index.html build/repo/
+          ls -l build/repo
+
+      - name: Upload the repository for Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/repo
 
       - name: Release
         run: |
@@ -88,3 +118,13 @@ jobs:
           sha256sum "$iso" > "$iso.sha256"
           gh release create "$VERSION" "$iso" "$iso.sha256" \
             --target "$GITHUB_SHA" --title "hos $VERSION" --generate-notes
+
+  pages:
+    needs: iso
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

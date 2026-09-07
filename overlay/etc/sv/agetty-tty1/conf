@@ -1,0 +1,2 @@
+# the live session: the hos user logs in by itself; hos-install drops -a
+GETTY_ARGS="--noclear -a hos"

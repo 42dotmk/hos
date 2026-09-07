@@ -1,9 +1,10 @@
-# held back with xbps ignorepkg (mklive -g); one per line, # comments.
+# held back with xbps ignorepkg (/etc/xbps.d/00-hos-ignore.conf in the
+# rootfs, so an installed system keeps ignoring them); one per line.
 # only things nothing on the ISO links against: xbps aborts the install
 # on an unresolvable shlib, so a linked library cannot be ignored.
 
-# base-system insists on a vi; hed is the editor
-nvi
+# linux-base wants it for the initramfs; hos-mkinitramfs builds hos's own
+dracut
 
 # OpenCL stack that MesaLib-devel drags in via gtk+3-devel: libclc,
 # libclang-cpp, clang headers, SPIRV translator — ~200M, unused

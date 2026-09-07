@@ -1,0 +1,133 @@
+#!/bin/sh
+# hos-install - put the running live system on a disk.
+#
+# usage: hos-install [-u USER] [-H HOSTNAME] DISK
+#
+# Wipes DISK (a whole device: /dev/sda, /dev/nvme0n1), gives it a root
+# filesystem - and an EFI system partition when booted from EFI - copies the
+# live root onto it as it is (every tool under /usr/src/hackable, the /bin
+# symlinks, fonts, skel, the enabled services), then undoes what makes the
+# live session live: the autologged-in live user goes, USER (default: the
+# name you type) is created in the live user's groups with zsh and
+# /etc/skel, root and USER get passwords, hos-mkinitramfs builds the
+# initramfs for the disk and grub goes on with init=/usr/bin/hsmd
+# (/etc/default/grub).
+# No menus: the choices that matter are the arguments, the rest is asked.
+set -e
+
+usage() {
+    echo "usage: hos-install [-u USER] [-H HOSTNAME] DISK" >&2
+    exit 1
+}
+
+user= host=
+while getopts u:H: opt; do
+    case $opt in
+    u) user=$OPTARG ;;
+    H) host=$OPTARG ;;
+    *) usage ;;
+    esac
+done
+shift $((OPTIND - 1))
+[ $# -eq 1 ] || usage
+disk=$1
+[ "$(id -u)" -eq 0 ] || { echo "hos-install: run as root" >&2; exit 1; }
+[ -b "$disk" ] || { echo "hos-install: $disk: not a block device" >&2; exit 1; }
+live=$(findmnt -no SOURCE /run/hos/medium 2>/dev/null || true)
+case $live in "$disk"*) echo "hos-install: $disk is the live medium" >&2; exit 1 ;; esac
+
+target=/mnt/hos
+efi=
+[ -d /sys/firmware/efi ] && efi=1
+case $disk in *[0-9]) p=p ;; *) p= ;; esac
+
+echo "This wipes $disk:"
+lsblk -o NAME,SIZE,MODEL "$disk"
+printf 'Type the device name to continue: '
+read -r answer
+[ "$answer" = "$disk" ] || { echo "aborted"; exit 1; }
+if [ -z "$user" ]; then
+    printf 'User to create: '
+    read -r user
+    [ -n "$user" ] || { echo "aborted"; exit 1; }
+fi
+
+echo "== partitioning"
+umount -R "$target" 2>/dev/null || true
+if [ -n "$efi" ]; then
+    printf 'label: gpt\nsize=512M, type=uefi\ntype=linux\n' | sfdisk -q "$disk"
+    espdev=$disk${p}1 rootdev=$disk${p}2
+else
+    printf 'label: dos\ntype=83, bootable\n' | sfdisk -q "$disk"
+    rootdev=$disk${p}1
+fi
+udevadm settle 2>/dev/null || sleep 1 # partition nodes appear
+[ -n "$efi" ] && mkfs.vfat -F32 "$espdev" >/dev/null
+mkfs.ext4 -q -F "$rootdev"
+mkdir -p "$target"
+mount "$rootdev" "$target"
+if [ -n "$efi" ]; then
+    mkdir -p "$target/boot/efi"
+    mount "$espdev" "$target/boot/efi"
+fi
+
+echo "== copying the live root (a few minutes)"
+# --one-file-system keeps /proc, /sys, /dev, /run, /tmp and $target out
+tar -C / --one-file-system --xattrs --warning=no-file-changed -cf - . |
+    tar -C "$target" --xattrs --xattrs-include='*' -xpf -
+
+echo "== fstab"
+{
+    echo "UUID=$(blkid -s UUID -o value "$rootdev") / ext4 defaults 0 1"
+    [ -n "$efi" ] && echo "UUID=$(blkid -s UUID -o value "$espdev") /boot/efi vfat defaults 0 2"
+    echo "tmpfs /tmp tmpfs defaults,nosuid,nodev 0 0"
+} > "$target/etc/fstab"
+
+echo "== users"
+liveuser=$(sed -n 's/^USERNAME=//p' /etc/default/live.conf 2>/dev/null)
+groups=$(id -Gn "$liveuser" 2>/dev/null | tr ' ' '\n' | grep -vx "$liveuser" | paste -sd, -)
+for f in dev proc sys; do
+    mount --rbind /$f "$target/$f"
+    mount --make-rslave "$target/$f"
+done
+if [ -n "$liveuser" ] && [ "$liveuser" != "$user" ]; then
+    chroot "$target" userdel -r "$liveuser" 2>/dev/null || true
+fi
+rm -f "$target/etc/default/live.conf" "$target/etc/sudoers.d/99-$liveuser" \
+    "$target/etc/polkit-1/rules.d/$liveuser.rules"
+sed -i 's/GETTY_ARGS="--noclear -a [^"]*"/GETTY_ARGS="--noclear"/' \
+    "$target/etc/sv/agetty-tty1/conf"
+printf '\nhos linux \\r (\\l)\n\n' > "$target/etc/issue" # the live one names hos:hos
+[ -n "$host" ] && echo "$host" > "$target/etc/hostname"
+if ! chroot "$target" id "$user" >/dev/null 2>&1; then
+    chroot "$target" useradd -m ${groups:+-G "$groups"} "$user"
+fi
+echo '%wheel ALL=(ALL:ALL) ALL' > "$target/etc/sudoers.d/wheel"
+chmod 440 "$target/etc/sudoers.d/wheel"
+echo "root password:"
+chroot "$target" passwd root
+echo "$user password:"
+chroot "$target" passwd "$user"
+
+echo "== initramfs"
+# root=UUID= from grub, found by hos's init; kernel updates redo this
+# through /etc/kernel.d
+for k in "$target"/lib/modules/*; do
+    chroot "$target" hos-mkinitramfs "${k##*/}"
+done
+
+echo "== grub"
+if [ -n "$efi" ]; then
+    chroot "$target" grub-install --target=x86_64-efi --efi-directory=/boot/efi \
+        --bootloader-id=hos --recheck
+    # also the removable-media path, for firmware that forgets NVRAM entries
+    chroot "$target" grub-install --target=x86_64-efi --efi-directory=/boot/efi \
+        --removable
+else
+    chroot "$target" grub-install "$disk"
+fi
+chroot "$target" grub-mkconfig -o /boot/grub/grub.cfg
+
+sync
+umount -R "$target"
+echo "== done: hos is on $disk. reboot, log in as $user on tty1, hwm starts."

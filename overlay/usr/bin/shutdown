@@ -1,19 +1,19 @@
 #!/bin/sh
-# shutdown(8) lookalike for hos: -r reboots, -H halts, anything else (-h,
-# -P) powers off, through the halt script next to this one.  Only "now".
-
-cmd=poweroff
-while getopts hPrHkct: opt; do
-    case $opt in
-    r) cmd=reboot ;;
-    H) cmd=halt ;;
-    h | P) cmd=poweroff ;;
-    k | c) exit 0 ;;
+# hos: shutdown(8) enough for habit and for tools that call it.
+#   shutdown -h|-P now   poweroff      shutdown -r now   reboot
+#   shutdown -H now      halt          (a time other than now: after sleeping)
+action=poweroff when=
+for a; do
+    case $a in
+    -h | -P | --poweroff) action=poweroff ;;
+    -r | --reboot) action=reboot ;;
+    -H | --halt) action=halt ;;
+    -c) echo "shutdown: nothing scheduled to cancel" >&2; exit 1 ;;
+    -*) ;;
+    now) when= ;;
+    +*) when=$((${a#+} * 60)) ;;
+    *) ;;
     esac
 done
-shift $((OPTIND - 1))
-if [ "$1" != now ]; then
-    echo "usage: ${0##*/} [-hPrH] now" >&2
-    exit 1
-fi
-exec $cmd
+[ -n "$when" ] && sleep "$when"
+exec hsm "$action"

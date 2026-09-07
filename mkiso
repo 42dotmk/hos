@@ -1,0 +1,62 @@
+#!/bin/sh
+# mkiso - the bootable image: the rootfs as a squashfs, the kernel and
+# hos's initramfs, a grub menu, packed by grub-mkrescue (BIOS + EFI,
+# hybrid so dd to a usb stick works). The volume label is what the init
+# looks for (hos.live=HOS on the cmdline).
+#
+#   mkiso ROOTFS INITRAMFS ISODIR OUT    (env VERSION, SPLASH)
+#
+# Runs where mkrootfs ran (the squashfs must see root's uids); needs
+# grub, grub-x86_64-efi, xorriso, mtools, squashfs-tools.
+set -e
+
+rootfs=$1 initramfs=$2 isodir=$3 out=$4
+: "${VERSION:=dev}" "${SPLASH:=splash.png}" "${LABEL:=HOS}"
+[ -n "$out" ] || { echo "usage: mkiso ROOTFS INITRAMFS ISODIR OUT" >&2; exit 1; }
+
+kver=$(ls "$rootfs/lib/modules")
+rm -rf "$isodir"
+mkdir -p "$isodir/boot/grub"
+cp "$rootfs/boot/vmlinuz-$kver" "$isodir/boot/vmlinuz"
+cp "$initramfs" "$isodir/boot/initramfs"
+cp "$SPLASH" "$isodir/boot/splash.png"
+
+echo "mkiso: squashfs"
+mksquashfs "$rootfs" "$isodir/hos.sfs" -comp xz -Xbcj x86 -b 1M \
+    -noappend -quiet -no-progress
+
+cat > "$isodir/boot/grub/grub.cfg" <<CFG
+set default=0
+set timeout=5
+insmod all_video
+insmod gfxterm
+insmod png
+set gfxmode=auto
+terminal_output gfxterm
+background_image /boot/splash.png
+set color_normal=light-gray/black
+set color_highlight=white/black
+set cmdline="hos.live=$LABEL init=/usr/bin/hsmd loglevel=4"
+
+menuentry "hos linux $VERSION" {
+    linux /boot/vmlinuz \$cmdline
+    initrd /boot/initramfs
+}
+menuentry "hos linux (no kernel modesetting)" {
+    linux /boot/vmlinuz \$cmdline nomodeset
+    initrd /boot/initramfs
+}
+menuentry "hos linux (serial console on ttyS0)" {
+    linux /boot/vmlinuz \$cmdline console=tty0 console=ttyS0,115200
+    initrd /boot/initramfs
+}
+menuentry "hos linux (init debug: every module and device)" {
+    linux /boot/vmlinuz \$cmdline hos.debug
+    initrd /boot/initramfs
+}
+CFG
+
+echo "mkiso: grub-mkrescue"
+grub-mkrescue -o "$out" "$isodir" -- -volid "$LABEL" >/dev/null 2>&1 ||
+    grub-mkrescue -o "$out" "$isodir" -- -volid "$LABEL"
+echo "mkiso: $out ($(du -h "$out" | cut -f1))"

@@ -1,0 +1,167 @@
+#!/bin/sh
+# mkpkg - build the hackable tools and pack them into xbps packages.
+#
+#   mkpkg ROOTFS REPO   build every project in PROJECTS in its own tree,
+#                       lay each out as it installs under /usr, pack it
+#                       with xbps-create, and index REPO with xbps-rindex
+#
+# No xbps-src: each package is the tool's binaries (plus whatever it reads
+# at runtime: man pages, hweb's web extension, hai's skills and tools,
+# hnd's dbus activation file) laid out under build/pkg/<p> and tarred by
+# xbps-create. Dependencies are computed, not declared: every NEEDED
+# soname of every ELF in the package is looked up in ROOTFS (which is
+# also the build environment's package set, see PACKAGES) and the owning
+# package becomes a run dependency, the soname a shlib-requires — the
+# same result xbps-src arrives at. A soname ROOTFS cannot account for is
+# an error: PACKAGES is missing something a tool links against.
+#
+# Versions come from git: v1.2.0 exactly on the tag, v1.2.0-14-gabc1234
+# becomes 1.2.0.14, no tag at all 0.0.0.<commit count>; the revision is
+# always _1. That keeps every rebuild from a newer commit an update.
+#
+# Runs as the user (nothing here needs root; xbps-create records root
+# ownership itself). Knobs from the environment: HACKABLE, PROJECTS,
+# VERSION (for the hackable-fonts package), FONTSRC.
+set -e
+
+: "${HACKABLE:=..}" "${PROJECTS:=}" "${VERSION:=dev}" "${FONTSRC:=fonts}"
+arch=x86_64
+maintainer="Costa Halicea <costa@codechem.com>"
+rootfs=$1 repo=$2
+die() { echo "mkpkg: $*" >&2; exit 1; }
+[ -n "$repo" ] || die "usage: mkpkg ROOTFS REPO"
+[ -d "$rootfs/var/db/xbps" ] || die "$rootfs: no rootfs, run make rootfs first"
+case $rootfs in /*) ;; *) rootfs=$PWD/$rootfs ;; esac
+case $repo in /*) ;; *) repo=$PWD/$repo ;; esac
+pkgdir=$(dirname "$repo")/pkg
+jobs=$(nproc 2>/dev/null || echo 2)
+
+# xbps version from git describe (see above); only digits and dots survive
+gitver() {
+    d=$(git -C "$1" describe --tags --long --match 'v*' 2>/dev/null) || d=
+    if [ -n "$d" ]; then
+        d=${d%-g*}; n=${d##*-}; t=${d%-*}; t=${t#v}
+        [ "$n" = 0 ] && echo "$t" || echo "$t.$n"
+    else
+        echo "0.0.0.$(git -C "$1" rev-list --count HEAD 2>/dev/null || echo 0)"
+    fi | tr -c '0-9.\n' '.' | tr -s '.'
+}
+cleanver() { # v0.0.3 -> 0.0.3, v0.0.3-2-gabc-dirty -> 0.0.3.2, dev -> 0
+    v=$(echo "$1" | sed 's/^v//; s/-g[0-9a-f]*//; s/-dirty//' | tr -c '0-9.\n' '.' | tr -s '.' | sed 's/^\.//; s/\.$//')
+    echo "${v:-0}"
+}
+
+# one line: the packages owning every NEEDED soname of the ELFs under $1
+# ("glibc>=2.41_1 SDL2>=2.32.10_1 ..."); the sonames themselves in $sos
+deps() {
+    sos=$(find "$1" -type f \( -perm -u+x -o -name '*.so' \) -exec sh -c '
+        for f; do [ "$(head -c4 "$f" | tr -d "\177")" = ELF ] && readelf -d "$f"; done' _ {} + 2>/dev/null |
+        awk '/\(NEEDED\)/ { gsub(/[][]/, "", $5); print $5 }' | sort -u | tr '\n' ' ')
+    for so in $sos; do
+        pv=$(xbps-query -r "$rootfs" -o "/usr/lib/$so" 2>/dev/null | head -1) ||:
+        [ -n "$pv" ] || die "$so needed by $2 is in no package of the rootfs (PACKAGES?)"
+        pv=${pv%%:*}
+        echo "$(xbps-uhelper getpkgname "$pv")>=$(xbps-uhelper getpkgversion "$pv")"
+    done | sort -u | tr '\n' ' '
+}
+
+# build one project in its tree
+build() {
+    case $1 in
+    # BUILD_DIR keeps the FHS build (man pages baked at /usr/share/man)
+    # apart from the developer's default one in build/
+    hed) make -s -j"$jobs" -C "$2" BUILD_DIR=build/hos PREFIX=/usr MAN_DIR=/usr/share/man ;;
+    *) make -s -j"$jobs" -C "$2" ;;
+    esac
+}
+
+# lay one project out under $dest as it installs
+layout() {
+    p=$1 src=$2 dest=$3
+    bin() { for b; do install -Dm755 "$src/$b" "$dest/usr/bin/${b##*/}"; done; }
+    case $p in
+    hed) make -s -C "$src" install BUILD_DIR=build/hos PREFIX=/usr MAN_DIR=/usr/share/man DESTDIR="$dest" >/dev/null ;;
+    hsm) bin hsmd hsm ;;
+    hai)
+        bin haid hai
+        for f in "$src"/skills/*.md; do install -Dm644 "$f" "$dest/usr/share/hai/skills/${f##*/}"; done
+        for f in "$src"/tools/*; do install -Dm755 "$f" "$dest/usr/share/hai/tools/${f##*/}"; done ;;
+    hweb)
+        # WebKit loads hweb-ext.so from the directory of the real binary
+        # (/proc/self/exe), so the pair lives in /usr/lib/hweb
+        install -Dm755 "$src/hweb" "$dest/usr/lib/hweb/hweb"
+        install -Dm755 "$src/hweb-ext.so" "$dest/usr/lib/hweb/hweb-ext.so"
+        mkdir -p "$dest/usr/bin" && ln -sf ../lib/hweb/hweb "$dest/usr/bin/hweb"
+        bin hwebc
+        install -Dm644 "$src/hweb.desktop" "$dest/usr/share/applications/hweb.desktop" ;;
+    hnd)
+        bin hnd
+        mkdir -p "$dest/usr/share/dbus-1/services"
+        printf '[D-BUS Service]\nName=org.freedesktop.Notifications\nExec=/usr/bin/hnd\n' \
+            > "$dest/usr/share/dbus-1/services/org.freedesktop.Notifications.service" ;;
+    *) bin "$p" ;;
+    esac
+}
+
+desc() {
+    case $1 in
+    hed) echo "Terminal text editor: plugins, tree-sitter, vim/emacs/vscode keymaps" ;;
+    hterm) echo "SDL2 terminal emulator" ;;
+    hwm) echo "Scrollable-column X11 tiling window manager" ;;
+    hws) echo "Workspace and window overview overlay for X11" ;;
+    htray) echo "System tray and status bar for X11" ;;
+    hnd) echo "Desktop notification daemon" ;;
+    hmenu) echo "Launcher: item lists from shell commands, matched by fzf" ;;
+    hsm) echo "Service supervisor and init (hsmd) with its client (hsm)" ;;
+    hml) echo "Mail: IMAP/Maildir sync, SMTP send, search index" ;;
+    hstt) echo "Speech-to-text dictation with local whisper.cpp" ;;
+    hweb) echo "Vim-like WebKitGTK browser with an automation surface" ;;
+    hbg) echo "Root-window background setter and rotator" ;;
+    hai) echo "Hackable AI: agent daemon (haid) and client (hai) for OpenAI-compatible models" ;;
+    hackable-fonts) echo "Fonts the hackable tools are configured for (Iosevka Nerd Font Mono)" ;;
+    *) echo "hackable tool $1" ;;
+    esac
+}
+
+# hand-kept dependencies a soname cannot express (programs exec'd, fonts)
+extradeps() {
+    case $1 in
+    hterm) echo "hackable-fonts>=0 fontconfig>=0" ;;
+    hmenu) echo "fzf>=0" ;;
+    hweb) echo "fzf>=0 curl>=0" ;;
+    hai) echo "ca-certificates>=0" ;;
+    esac
+}
+
+pack() { # name version srcdir(or "") dest
+    n=$1 v=$2 dest=$4
+    d=$(deps "$dest" "$n")
+    xbps-create -q -A "$arch" -n "$n-${v}_1" -s "$(desc "$n")" -m "$maintainer" \
+        -H "https://github.com/42dotmk/$n" -B "hos mkpkg" \
+        -D "$d $(extradeps "$n")" --shlib-requires "$sos" "$dest"
+    echo "mkpkg: $n-${v}_1 (deps: ${d}$(extradeps "$n"))"
+}
+
+rm -rf "$pkgdir" "$repo"
+mkdir -p "$pkgdir" "$repo"
+cd "$repo"
+for p in $PROJECTS; do
+    src=$HACKABLE/$p
+    case $src in /*) ;; *) src=$OLDPWD/$src ;; esac
+    [ -d "$src" ] || die "$src: no such project"
+    build "$p" "$src"
+    layout "$p" "$src" "$pkgdir/$p"
+    pack "$p" "$(gitver "$src")" "$src" "$pkgdir/$p"
+done
+
+# the fonts hterm's config.h names (under /usr/share/fonts for fontconfig;
+# the literal ~halicea path it compiles in is stage's business)
+if [ -n "$(ls "$OLDPWD/$FONTSRC" 2>/dev/null)" ]; then
+    for f in "$OLDPWD/$FONTSRC"/*; do
+        install -Dm644 "$f" "$pkgdir/hackable-fonts/usr/share/fonts/hackable/${f##*/}"
+    done
+    pack hackable-fonts "$(cleanver "$VERSION")" "" "$pkgdir/hackable-fonts"
+fi
+
+xbps-rindex -f -a "$repo"/*.xbps >/dev/null
+echo "mkpkg: $(ls "$repo"/*.xbps | wc -l) packages indexed in $repo"

@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Boot the newest hos ISO under qemu and drive it over the serial console,
-with a freshly built hsmd and the init-related overlay files injected: the
-ISO's initrd copies anything under /updates onto the live root before
-switching to it, so no ISO rebuild (and no root) is needed to try a change
-to hsm or to overlay/etc/hsm.
+with a freshly built hsmd and the init-related overlay files injected: hos's
+init copies anything under /updates in the initramfs onto the live root
+before switching to it, so no ISO rebuild is needed to try a change to hsm
+or to overlay/etc/hsm.
 
-    python3 vmtest.py pid1     # init=/usr/bin/hsmd: services, sv check, poweroff
+    python3 vmtest.py pid1     # services up, sv check, restart, logs, poweroff
     python3 vmtest.py reboot   # same, plus a reboot cycle before the poweroff
-    python3 vmtest.py runit    # runit as init, hsmd as stage 2, poweroff via runit-init
 
-Needs qemu-system-x86_64 with /dev/kvm, isoinfo (cdrtools) and cc.  Kernel,
+sv is runit's own binary: hsmd speaks runit's supervise/ protocol, so
+`sv check` exercises that; poweroff/reboot are hos's `hsm` wrappers.
+Needs qemu-system-x86_64 with /dev/kvm, isoinfo (cdrtools), zstd and cc.  Kernel,
 initrd and the console log land in build/vm/."""
 import glob, os, re, socket, subprocess, sys, time
 
@@ -17,13 +18,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 VM = f"{HERE}/build/vm"
 HSM = f"{HERE}/../hsm"
 OVERLAY = f"{HERE}/overlay"
-# what mklive puts in the boot menu, minus init= and console=
-BASEARGS = ("root=live:CDLABEL=VOID_LIVE ro rd.luks=0 rd.md=0 rd.dm=0 loglevel=4 "
-            "vconsole.unicode=1 vconsole.keymap=us locale.LANG=en_US.UTF-8 "
-            "live.user=hos live.shell=/bin/zsh live.autologin rd.live.overlay.overlayfs=1")
-INJECT = ["etc/hsm/boot", "etc/hsm/shutdown", "etc/runit/2",
-          "etc/runit/shutdown.d/10-sv-stop.sh",
-          "usr/bin/sv", "usr/bin/halt", "usr/bin/shutdown"]
+# what the ISO's grub menu passes, minus console=
+BASEARGS = "hos.live=HOS init=/usr/bin/hsmd loglevel=4"
+INJECT = ["etc/hsm/boot", "etc/hsm/shutdown"]
 
 
 def sh(*cmd, **kw):
@@ -33,7 +30,7 @@ def sh(*cmd, **kw):
 def prepare():
     iso = max(glob.glob(f"{HERE}/hos-*.iso"), key=os.path.getmtime)
     os.makedirs(VM, exist_ok=True)
-    for f in ("vmlinuz", "initrd"):
+    for f in ("vmlinuz", "initramfs"):
         if not os.path.exists(f"{VM}/{f}") or os.path.getmtime(f"{VM}/{f}") < os.path.getmtime(iso):
             with open(f"{VM}/{f}", "wb") as o:
                 sh("isoinfo", "-R", "-x", f"/boot/{f}", "-i", iso, stdout=o, stderr=subprocess.DEVNULL)
@@ -79,8 +76,10 @@ def cpio_newc(entries):
 
 
 def initrd(tag):
-    """the ISO's initrd with an /updates cpio appended (the kernel unpacks
-    concatenated archives; vmklive's pre-pivot hook copies /updates over)"""
+    """the ISO's initramfs with an /updates cpio appended inside the same
+    zstd stream (the kernel unpacks concatenated cpio archives, but not an
+    uncompressed one after a zstd one); hos's init copies /updates over
+    the new root"""
     e = []
 
     def add(dst, src, mode=0o755):
@@ -90,15 +89,14 @@ def initrd(tag):
     add("/usr/src/hackable/hsm/hsm", f"{VM}/hsm")
     for p in INJECT:
         add("/" + p, f"{OVERLAY}/{p}", os.stat(f"{OVERLAY}/{p}").st_mode & 0o777)
-    e.append(("updates/usr/bin/reboot", 0, None, "halt"))
-    e.append(("updates/usr/bin/poweroff", 0, None, "halt"))
-    # console=ttyS0 makes vmklive enable agetty-ttyS0; log root in without a password
+    # a getty on the serial console, logging root in without a password
+    e.append(("updates/var/service/agetty-ttyS0", 0, None, "/etc/sv/agetty-ttyS0"))
     e.append(("updates/etc/sv/agetty-ttyS0/conf", 0o644,
               b'GETTY_ARGS="-L -8 -a root --noclear"\nBAUD_RATE=115200\nTERM_NAME=vt100\n', None))
-    path = f"{VM}/initrd.{tag}"
+    path = f"{VM}/initramfs.{tag}"
+    raw = subprocess.run(["zstd", "-dc", f"{VM}/initramfs"], check=True, capture_output=True).stdout
     with open(path, "wb") as o:
-        o.write(open(f"{VM}/initrd", "rb").read())
-        o.write(cpio_newc(e))
+        subprocess.run(["zstd", "-q", "-3"], input=raw + cpio_newc(e), stdout=o, check=True)
     return path
 
 
@@ -137,8 +135,8 @@ class Serial:
 
 
 class Machine:
-    def __init__(self, iso, tag, init_hsmd):
-        args = BASEARGS + (" init=/usr/bin/hsmd" if init_hsmd else "") + " console=ttyS0,115200"
+    def __init__(self, iso, tag):
+        args = BASEARGS + " console=ttyS0,115200"
         sock = f"/run/user/{os.getuid()}/hos-vmtest-{tag}.sock"  # unix paths: < 108 bytes
         if os.path.exists(sock):
             os.unlink(sock)
@@ -168,6 +166,7 @@ class Machine:
         self.ser.send(cmd + "\n")
         out = self.ser.expect(r"HOSP> ", timeout)
         out = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", out.split("\n", 1)[1] if "\n" in out else "")
+        out = out.replace("\r", "")  # the bracketed-paste escape leaves one before the first line
         print(f"$ {cmd}\n{out.strip()}\n", flush=True)
         return out
 
@@ -191,7 +190,7 @@ def check(cond, what):
 
 
 def scenario_pid1(iso, m=None):
-    m = m or Machine(iso, "pid1", True)
+    m = m or Machine(iso, "pid1")
     m.shell()
     ok = check("hsmd" in m.run("cat /proc/1/comm"), "hsmd is pid 1")
     st = m.run("hsm status")
@@ -206,7 +205,7 @@ def scenario_pid1(iso, m=None):
 
 
 def scenario_reboot(iso):
-    m = Machine(iso, "reboot", True)
+    m = Machine(iso, "reboot")
     m.shell()
     ok = check("hsmd" in m.run("cat /proc/1/comm"), "hsmd is pid 1")
     print("--- reboot", flush=True)
@@ -221,20 +220,8 @@ def scenario_reboot(iso):
     return ok
 
 
-def scenario_runit(iso):
-    m = Machine(iso, "runit", False)
-    m.shell()
-    ok = check("runit" in m.run("cat /proc/1/comm"), "runit is pid 1")
-    ok &= check(re.search(r"^\s*\d+\s+1\s+hsmd", m.run("ps -eo pid,ppid,comm | grep hsmd"), re.M),
-                "hsmd is runit's stage 2")
-    ok &= check(m.run("sv check dbus; echo rc=$?").strip().endswith("rc=0"), "sv check dbus")
-    ok &= check("not init" in m.run("hsm poweroff"), "hsm refuses poweroff when not init")
-    m.down("poweroff", r"hsmd: bye")  # the halt script falls back to runit-init
-    return ok
-
-
 if __name__ == "__main__":
-    scenarios = {"pid1": scenario_pid1, "reboot": scenario_reboot, "runit": scenario_runit}
+    scenarios = {"pid1": scenario_pid1, "reboot": scenario_reboot}
     if len(sys.argv) != 2 or sys.argv[1] not in scenarios:
         sys.exit(f"usage: vmtest.py {'|'.join(scenarios)}")
     sys.exit(0 if scenarios[sys.argv[1]](prepare()) else 1)

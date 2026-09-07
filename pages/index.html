@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>hos package repository</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;max-width:46rem;margin:3rem auto;padding:0 1rem}pre{background:#f4f4f4;padding:1rem;overflow-x:auto}</style>
+<h1>hos</h1>
+<p>xbps repository for the <a href="https://github.com/42dotmk">hackable</a> tools:
+hed, hterm, hwm, hws, htray, hnd, hmenu, hsm, hml, hstt, hweb, hbg, hai.
+The <a href="https://github.com/42dotmk/hos/releases">hos ISO</a> ships them
+preinstalled and points here for updates; on plain Void Linux:</p>
+<pre>echo repository=https://42dotmk.github.io/hos | sudo tee /etc/xbps.d/10-hos-repository.conf
+sudo xbps-install -S hed hterm hwm</pre>
+<p>The first sync asks to trust the repository key; its public half is
+<a href="https://github.com/42dotmk/hos/blob/main/hos-repo.pub">hos-repo.pub</a>
+in the hos repository. Packages are built by <a href="https://github.com/42dotmk/hos/blob/main/mkpkg">mkpkg</a>
+from each tool's tree at release time, versioned from git.</p>

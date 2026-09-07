@@ -1,5 +1,57 @@
-# installed on top of base-system (mklive default); one per line, # comments
-# no vi, no vim, no editors but hed
+# everything xbps installs into the rootfs; one per line, # comments.
+# hos owns the base list: no base-system (it insists on runit-void and a
+# vi), no runit-void (hsmd is init; the boot scripts, gettys and
+# halt/reboot/shutdown are hos's, in overlay/), no dracut (hos-mkinitramfs).
+
+# base: what a shell session and the boot script need
+base-files
+ncurses
+libgcc
+coreutils
+findutils
+diffutils
+dash
+bash
+grep
+gzip
+file
+sed
+gawk
+less
+util-linux
+which
+tar
+man-pages
+mdocml
+shadow
+e2fsprogs
+dosfstools
+procps-ng
+tzdata
+pciutils
+usbutils
+iana-etc
+iproute2
+iputils
+kbd
+kmod
+eudev
+sudo
+openssh
+xbps
+glibc-locales
+# sv and chpst: Void's run scripts use them, hsmd speaks their protocol
+runit
+
+# kernel and all firmware (linux-base is the firmware set; its dracut
+# dependency is held back in IGNORE)
+linux
+linux-base
+wifi-firmware
+
+# hos-mkinitramfs on an installed system (kernel updates rebuild it)
+cpio
+zstd
 
 # X
 xorg-minimal
@@ -9,10 +61,12 @@ dejavu-fonts-ttf
 dbus
 NetworkManager
 
-# login shell (live.shell= on the cmdline, /etc/default/useradd for
-# installed systems); hwm's autostart also runs through /bin/zsh -c —
-# without it hbg/htray/hnd never start. The rest are what that list invokes.
+# login shell (/etc/default/useradd); hwm's autostart also runs through
+# /bin/zsh -c — without it hbg/htray/hnd never start. The rest are what
+# that list invokes.
 zsh
+zsh-autosuggestions
+zsh-syntax-highlighting
 setxkbmap
 xset
 picom
@@ -44,8 +98,15 @@ wget
 
 # hed's optional helpers
 ripgrep
-tmux
 ctags
+
+# terminal multiplexer, default config in /etc/tmux.conf
+tmux
+
+# password store (pulls gnupg); xclip is what pass -c and the tmux
+# config copy through
+pass
+xclip
 
 # file manager in the terminal (uses fzf/ripgrep above when present)
 yazi
@@ -73,3 +134,7 @@ libwebkit2gtk41-devel
 # hstt's whisper.cpp vulkan backend compiles shaders at build time
 shaderc
 SPIRV-Headers
+
+# hos-install puts grub on the target (efibootmgr comes with grub-x86_64-efi)
+grub
+grub-x86_64-efi

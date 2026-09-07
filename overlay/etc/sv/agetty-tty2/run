@@ -1,0 +1,5 @@
+#!/bin/sh
+# hos getty: the tty is the service name's suffix, ./conf sets GETTY_ARGS
+tty=${PWD##*-}
+[ -r conf ] && . ./conf
+exec agetty ${GETTY_ARGS} "$tty" "${BAUD_RATE:-38400}" "${TERM_NAME:-linux}"

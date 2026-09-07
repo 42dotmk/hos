@@ -1,5 +1,5 @@
 NAME="hos"
 ID=hos
-ID_LIKE=void
-PRETTY_NAME="hos linux"
-HOME_URL="https://github.com/42dotmk"
+ID_LIKE=hos
+PRETTY_NAME="Hos Linux"
+HOME_URL="https://github.com/42dotmk/hos"

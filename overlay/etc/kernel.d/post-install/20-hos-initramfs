@@ -1,0 +1,4 @@
+#!/bin/sh
+# hos: rebuild the initramfs for a newly installed kernel (xbps runs this
+# from the linux package's INSTALL with the package name and version)
+exec hos-mkinitramfs "$2"

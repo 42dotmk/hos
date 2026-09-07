@@ -1,16 +1,25 @@
 #!/bin/sh
 # hos stage 3: run by hsmd as pid 1 once every service is down, with the
-# pending action (poweroff, reboot or halt) as $1.  Void's shutdown tasks
-# in /etc/runit/shutdown.d do the rest; the one that stops runit services
-# is skipped because hsmd already stopped them.
+# pending action (poweroff, reboot or halt) as $1; hsmd calls reboot(2)
+# after it returns.
 
 PATH=/usr/bin:/usr/sbin
 
-. /etc/runit/functions
-detect_container
+msg() { printf '\033[1m=> %s\033[m\n' "$*"; }
 [ -r /etc/rc.conf ] && . /etc/rc.conf
+
 echo
-for f in /etc/runit/shutdown.d/*.sh; do
-    case $f in *-sv-stop.sh) continue ;; esac
-    [ -r $f ] && . $f
-done
+[ -x /etc/rc.shutdown ] && /etc/rc.shutdown
+[ -n "$HARDWARECLOCK" ] && hwclock --systohc --$(echo "$HARDWARECLOCK" | tr A-Z a-z)
+msg "Stopping udev..."
+udevadm control --exit
+msg "Sending TERM signal to processes..."
+pkill --inverse -s0,1 -TERM
+sleep 1
+msg "Sending KILL signal to processes..."
+pkill --inverse -s0,1 -KILL
+msg "Unmounting filesystems, disabling swap..."
+swapoff -a
+umount -r -a -t nosysfs,noproc,nodevtmpfs,notmpfs
+mount -o remount,ro / 2>/dev/null
+sync

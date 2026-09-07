@@ -1,0 +1,86 @@
+#!/bin/sh
+# hos-mkinitramfs - build the initramfs hos boots with: hos's own init
+# (/usr/lib/hos/init, source in /usr/src/hackable/hos/init) plus the block
+# drivers and filesystems it may need, with what modules.dep says they
+# depend on, and the module tables it reads. No shell, no udev, no
+# firmware: the init loads drivers by modalias and finds the root itself.
+# Modules go in uncompressed (Void ships .ko.zst, and the kernel's own
+# decompressor is built for gzip only); the archive as a whole is zstd.
+#
+# usage: hos-mkinitramfs [-i INIT] [-m MODULES] [-o OUT] [KVER]
+#   KVER     kernel release (default: the running one)
+#   -m DIR   its modules (default /lib/modules/KVER)
+#   -i FILE  the init binary (default /usr/lib/hos/init)
+#   -o FILE  output (default /boot/initramfs-KVER.img, what grub-mkconfig
+#            looks for). /etc/kernel.d hooks run this on kernel updates.
+set -e
+
+init=/usr/lib/hos/init mods= out=
+while getopts i:m:o: opt; do
+    case $opt in
+    i) init=$OPTARG ;;
+    m) mods=$OPTARG ;;
+    o) out=$OPTARG ;;
+    *) echo "usage: hos-mkinitramfs [-i INIT] [-m MODULES] [-o OUT] [KVER]" >&2; exit 1 ;;
+    esac
+done
+shift $((OPTIND - 1))
+kver=${1:-$(uname -r)}
+mods=${mods:-/lib/modules/$kver}
+out=${out:-/boot/initramfs-$kver.img}
+case $out in /*) ;; *) out=$PWD/$out ;; esac
+[ -x "$init" ] || { echo "hos-mkinitramfs: $init: not an executable" >&2; exit 1; }
+[ -r "$mods/modules.dep" ] || { echo "hos-mkinitramfs: $mods: no modules.dep" >&2; exit 1; }
+
+# where the block drivers live; every controller in there goes in, since
+# the iso has to boot on hardware nobody has seen (drivers/pci for vmd,
+# intel's nvme-behind-raid; drivers/phy for the usb phys some xhci need)
+dirs="kernel/drivers/ata kernel/drivers/block kernel/drivers/cdrom
+      kernel/drivers/mmc kernel/drivers/nvme/host kernel/drivers/pci
+      kernel/drivers/phy kernel/drivers/scsi kernel/drivers/usb/common
+      kernel/drivers/usb/core kernel/drivers/usb/host
+      kernel/drivers/usb/storage kernel/drivers/virtio
+      kernel/fs/ext4 kernel/fs/isofs kernel/fs/jbd2 kernel/fs/mbcache
+      kernel/fs/overlayfs kernel/fs/squashfs"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/dev" "$tmp/proc" "$tmp/sys" "$tmp/run" "$tmp/newroot" \
+    "$tmp/lib/modules/$kver"
+cp "$init" "$tmp/init"
+chmod 755 "$tmp/init"
+
+# the wanted modules and, transitively, what modules.dep lists for them
+(cd "$mods" && for d in $dirs; do [ -d "$d" ] && find "$d" -name '*.ko*'; done) |
+    awk 'FNR == NR { p = $1; sub(/:$/, "", p); d[p] = substr($0, index($0, ":") + 1); next }
+         { q[++n] = $0 }
+         END {
+             while (i < n) {
+                 m = q[++i]
+                 if (m in seen) continue
+                 seen[m] = 1; print m
+                 k = split(d[m], ds, " ")
+                 for (j = 1; j <= k; j++) q[++n] = ds[j]
+             }
+         }' "$mods/modules.dep" - > "$tmp/list"
+while read -r f; do
+    dst="$tmp/lib/modules/$kver/${f%.zst}"
+    dst=${dst%.gz}
+    dst=${dst%.xz}
+    mkdir -p "${dst%/*}"
+    case $f in
+    *.zst) zstd -dq -o "$dst" "$mods/$f" ;;
+    *.gz) gzip -dc "$mods/$f" > "$dst" ;;
+    *.xz) xz -dc "$mods/$f" > "$dst" ;;
+    *) cp "$mods/$f" "$dst" ;;
+    esac
+done < "$tmp/list"
+sed 's/\.ko\.\(zst\|gz\|xz\)\b/.ko/g' "$mods/modules.dep" > "$tmp/lib/modules/$kver/modules.dep"
+# aliases only for the modules we carry: the init matches every device's
+# modalias against each line, and the full table is 1.5M
+awk 'FNR == NR { n = $1; sub(/^.*\//, "", n); sub(/\.ko.*$/, "", n); gsub(/-/, "_", n); m[n] = 1; next }
+     $1 == "alias" { n = $3; gsub(/-/, "_", n); if (n in m) print }' \
+    "$tmp/list" "$mods/modules.alias" > "$tmp/lib/modules/$kver/modules.alias"
+
+(cd "$tmp" && find . | cpio --quiet -o -H newc) | zstd -q -9 -T0 > "$out"
+echo "$out: $(wc -l < "$tmp/list") modules, $(du -h "$out" | cut -f1)"

@@ -1,6 +1,8 @@
-# runit services enabled in the ISO beyond base defaults; one per line
-# gettys: base-system enables tty1-6; overlay/etc/sv/agetty-tty{3..6}/down
-# masks all but tty1 and tty2
+# services enabled in the rootfs: /var/service/NAME -> /etc/sv/NAME, one
+# per line. Two gettys (hos's own service dirs, overlay/etc/sv); udevd,
+# dbus and NetworkManager come with their packages.
+agetty-tty1
+agetty-tty2
 udevd
 dbus
 NetworkManager

@@ -1,0 +1,4 @@
+# serial console (vmtest enables this one; console=ttyS0 on the cmdline)
+GETTY_ARGS="-L -8 --noclear"
+BAUD_RATE=115200
+TERM_NAME=vt100

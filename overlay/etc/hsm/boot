@@ -1,28 +1,80 @@
 #!/bin/sh
-# hos stage 1: run by hsmd as pid 1 before it supervises anything.  Void's
-# one-time boot tasks (pseudo filesystems, udev, fsck and mount fstab,
-# swap, hostname, sysctl...) still live in /etc/runit/core-services; only
-# the script that creates runit's control files is skipped.
+# hos stage 1: run by hsmd as pid 1 before it supervises anything. The
+# one-time boot tasks (pseudo filesystems, udev, fsck and fstab, swap,
+# hostname, sysctl...) in ~80 lines, hos's own; /etc/rc.conf holds the
+# knobs (KEYMAP, FONT, HARDWARECLOCK, TIMEZONE), /etc/rc.local runs last.
 
 PATH=/usr/bin:/usr/sbin
 
-. /etc/runit/functions
-
-msg "Welcome to hos!"
+msg() { printf '\033[1m=> %s\033[m\n' "$*"; }
+emergency() {
+    echo "hos: $* failed; this is an emergency shell, exit to keep booting"
+    /bin/sh -l
+}
 
 [ -r /etc/rc.conf ] && . /etc/rc.conf
 
-detect_container
-for f in /etc/runit/core-services/*.sh; do
-    case $f in *-runit-control.sh) continue ;; esac
-    [ -r $f ] && . $f
-done
+msg "Welcome to hos!"
+mountpoint -q /proc || mount -o nosuid,noexec,nodev -t proc proc /proc
+mountpoint -q /sys || mount -o nosuid,noexec,nodev -t sysfs sys /sys
+mountpoint -q /run || mount -o mode=0755,nosuid,nodev -t tmpfs run /run
+mountpoint -q /dev || mount -o mode=0755,nosuid -t devtmpfs dev /dev
+mkdir -p -m0755 /run/runit /run/user /run/lock /run/log /dev/pts /dev/shm
+mountpoint -q /dev/pts || mount -o mode=0620,gid=5,nosuid,noexec -n -t devpts devpts /dev/pts
+mountpoint -q /dev/shm || mount -o mode=1777,nosuid,nodev -n -t tmpfs shm /dev/shm
+mountpoint -q /sys/fs/cgroup || mount -t cgroup2 -o nsdelegate cgroup2 /sys/fs/cgroup
+if [ -d /sys/firmware/efi/efivars ]; then
+    mountpoint -q /sys/firmware/efi/efivars ||
+        mount -o nosuid,noexec,nodev -t efivarfs efivarfs /sys/firmware/efi/efivars
+fi
 
-# /var/service resolves through this link, which runit's stage 2 used to
-# create; keep it so hsmd, sv and people find the services where they expect
-mkdir -p /run/runit/runsvdir
-ln -sfn /etc/runit/runsvdir/current /run/runit/runsvdir/current
+# modules with static device nodes must be in before udev; then whatever
+# /etc/modules-load.d asks for
+for m in $(kmod static-nodes -f devname 2>/dev/null | cut -d' ' -f1); do
+    modprobe -bq "$m" 2>/dev/null
+done
+cat /etc/modules-load.d/*.conf /run/modules-load.d/*.conf 2>/dev/null |
+    sed 's/#.*//' | while read -r m; do [ -n "$m" ] && modprobe -bq "$m"; done
+
+msg "Starting udev and waiting for devices to settle..."
+udevd --daemon
+udevadm trigger --action=add --type=subsystems
+udevadm trigger --action=add --type=devices
+udevadm settle
+
+[ -n "$FONT" ] && setfont ${FONT_MAP:+-m $FONT_MAP} ${FONT_UNIMAP:+-u $FONT_UNIMAP} $FONT
+[ -n "$KEYMAP" ] && loadkeys -q -u "$KEYMAP"
+[ -n "$HARDWARECLOCK" ] && TZ=$TIMEZONE hwclock --systz \
+    --$(echo "$HARDWARECLOCK" | tr A-Z a-z) --noadjfile
+
+# a disk root is checked read-only, then everything in fstab comes up;
+# the live overlay has nothing to check
+if [ "$(findmnt -no FSTYPE /)" != overlay ]; then
+    msg "Checking filesystems..."
+    mount -o remount,ro / || emergency "remount ro"
+    fsck -A -T -a -t noopts=_netdev
+    [ $? -gt 1 ] && emergency fsck
+    mount -o remount,rw / || emergency "remount rw"
+fi
+msg "Mounting filesystems..."
+mount -a -t nosysfs,nonfs,nonfs4,nosmbfs,nocifs -O no_netdev || emergency "mount -a"
+swapon -a
+
+install -m0664 -o root -g utmp /dev/null /run/utmp
+for f in wtmp btmp lastlog; do
+    [ -e /var/log/$f ] || install -m0664 -o root -g utmp /dev/null /var/log/$f
+done
+install -dm1777 /tmp/.X11-unix /tmp/.ICE-unix
+rm -f /etc/nologin /forcefsck /fastboot
+
+ip link set up dev lo
+[ -r /etc/hostname ] && read -r HOSTNAME < /etc/hostname
+[ -n "$HOSTNAME" ] && printf %s "$HOSTNAME" > /proc/sys/kernel/hostname
+[ -n "$TIMEZONE" ] && ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
+sysctl -q --system
+dmesg > /var/log/dmesg.log
+chmod 0600 /var/log/dmesg.log
 
 [ -x /etc/rc.local ] && /etc/rc.local
 
-msg "Initialization complete, starting services..."
+msg "Starting services..."
