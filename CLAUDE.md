@@ -167,7 +167,10 @@ repository's key), and the four scripts `mkrootfs`, `mkpkg`, `mkiso`,
   --one-file-system` of the live root onto the target (so everything
   staged lands there; the medium under /run is another fs), fstab by
   UUID, the live user and its autologin/sudoers/`live.conf` removed,
-  USER created in the live user's groups, passwords asked,
+  USER created in the live user's groups (then its home chowned and
+  seeded from skel regardless: `/home/halicea` already exists on the
+  live root for hterm's font path, root-owned, and `useradd -m` leaves
+  such a home alone — X then dies on `.Xauthority`), passwords asked,
   `hos-mkinitramfs` per kernel in the target, grub with
   `--bootloader-id=hos` plus `--removable`, `grub-mkconfig` reading
   `overlay/etc/default/grub` (`init=/usr/bin/hsmd`). The installed

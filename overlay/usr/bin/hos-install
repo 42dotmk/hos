@@ -102,6 +102,12 @@ printf '\nhos linux \\r (\\l)\n\n' > "$target/etc/issue" # the live one names ho
 if ! chroot "$target" id "$user" >/dev/null 2>&1; then
     chroot "$target" useradd -m ${groups:+-G "$groups"} "$user"
 fi
+# the live root may already hold that home (hterm's compiled-in font path
+# is under /home/halicea, staged root-owned): useradd -m then keeps it
+# as is, no skel, and xauth cannot even create .Xauthority. Finish it.
+home=$(chroot "$target" getent passwd "$user" | cut -d: -f6)
+cp -an "$target/etc/skel/." "$target$home/"
+chroot "$target" chown -R "$user:$user" "$home"
 echo '%wheel ALL=(ALL:ALL) ALL' > "$target/etc/sudoers.d/wheel"
 chmod 440 "$target/etc/sudoers.d/wheel"
 echo "root password:"
