@@ -167,10 +167,10 @@ repository's key), and the four scripts `mkrootfs`, `mkpkg`, `mkiso`,
   --one-file-system` of the live root onto the target (so everything
   staged lands there; the medium under /run is another fs), fstab by
   UUID, the live user and its autologin/sudoers/`live.conf` removed,
-  USER created in the live user's groups (then its home chowned and
-  seeded from skel regardless: `/home/halicea` already exists on the
-  live root for hterm's font path, root-owned, and `useradd -m` leaves
-  such a home alone — X then dies on `.Xauthority`), passwords asked,
+  USER created in the live user's groups (its home then chowned and
+  seeded from skel regardless: `useradd -m` leaves a pre-existing home
+  alone, and X dies on `.Xauthority` in one the user cannot write),
+  passwords asked,
   `hos-mkinitramfs` per kernel in the target, grub with
   `--bootloader-id=hos` plus `--removable`, `grub-mkconfig` reading
   `overlay/etc/default/grub` (`init=/usr/bin/hsmd`). The installed
@@ -184,11 +184,13 @@ repository's key), and the four scripts `mkrootfs`, `mkpkg`, `mkiso`,
   default `modules` list, or fastfetch prints only the logo). The boot
   menu background `splash.png` is rendered from the same logo by
   `splash.py` (a Makefile rule); mkiso's grub.cfg uses it via gfxterm.
-- hterm's config.h compiles in absolute font paths under
-  `/home/halicea/.local/share/fonts`; stage copies the vendored Iosevka
-  files there, and the `hackable-fonts` package (hterm depends on it)
-  puts them in `/usr/share/fonts/hackable` for fontconfig. Pointing
-  hterm's config at that path would make the package self-sufficient.
+- Fonts: hterm, htray and hnd name the family "Iosevka Nerd Font Mono"
+  in their config.h and resolve it through fontconfig (hterm via
+  fc-match, so `fontconfig` is in `PACKAGES`); the `hackable-fonts`
+  package from `fonts/` puts the files in `/usr/share/fonts/hackable`
+  and stage primes the system cache with `fc-cache -s`. Nothing under
+  `/home` is staged any more (a root-owned `/home/halicea` once broke
+  installs for a user of that name).
   hbg's config.h reads `~/pictures/backgrounds/preffered`; stage gives
   `/etc/skel` and `/root` the `backgrounds/` picks (squashfs dedups the
   copies; keep them few and small).

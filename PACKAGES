@@ -73,9 +73,11 @@ picom
 xss-lock
 slock
 
-# hackable tool runtime deps
+# hackable tool runtime deps (fontconfig: hterm resolves its font family
+# with fc-match)
 SDL2
 SDL2_ttf
+fontconfig
 libXft
 fzf
 libwebkit2gtk41

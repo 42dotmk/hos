@@ -154,8 +154,8 @@ for p in $PROJECTS; do
     pack "$p" "$(gitver "$src")" "$src" "$pkgdir/$p"
 done
 
-# the fonts hterm's config.h names (under /usr/share/fonts for fontconfig;
-# the literal ~halicea path it compiles in is stage's business)
+# the font family hterm's config.h names, and htray's and hnd's; hterm
+# resolves it with fc-match, so it only has to be where fontconfig looks
 if [ -n "$(ls "$OLDPWD/$FONTSRC" 2>/dev/null)" ]; then
     for f in "$OLDPWD/$FONTSRC"/*; do
         install -Dm644 "$f" "$pkgdir/hackable-fonts/usr/share/fonts/hackable/${f##*/}"

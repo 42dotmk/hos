@@ -5,14 +5,15 @@ up: hos's own init, initramfs, boot scripts, service manager (hsmd as
 pid 1), boot menu and installer; the packages and the kernel come from
 the void linux repositories through xbps, the one part not worth
 redoing. two ttys, only the essential services, every hackable tool
-compiled and symlinked into /bin with its full source tree at
-/usr/src/hackable — edit, make, run, on the running system.
+as a package with its full source tree at /usr/src/hackable — edit,
+make, run, on the running system.
 
 ## build
 
     make            # hos-<version>-x86_64.iso, no sudo
     make rootfs     # just the package install into build/rootfs
-    make stage      # overlay, tools, fonts, user, services on top
+    make packages   # the tools as xbps packages into build/repo
+    make stage      # overlay, packages, sources, user, services on top
     make initramfs  # hos's init + block drivers -> build/initramfs
     make qemu       # boot the newest iso with kvm
     make vmtest     # boot it headless, hsmd as init, check services/reboot/poweroff
@@ -46,8 +47,8 @@ downloads what changed.
   history); hos itself as well, so the iso carries its own recipe
 - gcc/make/pkg-config/git/cmake + the -devel headers each tool needs,
   so the sources rebuild in place
-- iosevka nerd font mono at hterm's compiled-in path and under
-  /usr/share/fonts/hackable for the xft tools
+- iosevka nerd font mono (the hackable-fonts package) under
+  /usr/share/fonts/hackable, where fontconfig finds it for every tool
 - no vi, no vim, no editors but hed
 
 ## on the live system
@@ -71,8 +72,8 @@ downloads what changed.
 
 - wipes the disk (it asks you to type the device name), makes a root
   filesystem (and an EFI system partition when booted from EFI), copies
-  the live root onto it as-is — /usr/src/hackable, the /bin symlinks,
-  fonts, skel, enabled services — and writes fstab by UUID
+  the live root onto it as-is — the packages, /usr/src/hackable,
+  skel, enabled services — and writes fstab by UUID
 - undoes the live bits: the `hos` user, its autologin on tty1 and its
   passwordless sudo go; USER is created in the same groups with zsh,
   .xinitrc and the backgrounds from /etc/skel (wheel gets sudo); root
@@ -99,4 +100,5 @@ downloads what changed.
   halt/reboot/shutdown, hos-mkinitramfs and its kernel hooks,
   hos-install, /etc/default/grub, .xinitrc
 - `init/` — the initramfs init, one c file and a config.h
-- `mkrootfs`, `mkiso` — the two steps the Makefile drives
+- `mkrootfs`, `mkpkg`, `mkiso` — the steps the Makefile drives; `hos-repo.pub`
+  the package repository's key (CI holds the private half)
