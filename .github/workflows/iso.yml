@@ -50,10 +50,12 @@ jobs:
       run:
         shell: bash -e {0}  # the container's sh is dash
     steps:
+      # the image has no bash: this one step runs under its sh and installs it
       - name: Prepare container
+        shell: sh -e {0}
         run: |
           xbps-install -Syu xbps && xbps-install -yu
-          xbps-install -y git rsync python3 curl tar xz github-cli \
+          xbps-install -y bash git rsync python3 curl tar xz github-cli \
             cpio zstd squashfs-tools grub grub-x86_64-efi xorriso mtools
           git config --global --add safe.directory '*'
 
