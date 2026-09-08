@@ -69,7 +69,6 @@ zsh-autosuggestions
 zsh-syntax-highlighting
 setxkbmap
 xset
-picom
 xss-lock
 slock
 
@@ -83,6 +82,25 @@ fzf
 libwebkit2gtk41
 alsa-lib
 vulkan-loader
+# hai's notify tool execs notify-send; hnd is the daemon behind it
+libnotify
+# sound: hwm's autostart runs pipewire; overlay/etc/pipewire/pipewire.conf.d
+# makes it launch wireplumber and pipewire-pulse itself. hwm's volume keys
+# run wpctl, its brightness keys brightnessctl
+pipewire
+wireplumber
+brightnessctl
+# lid, power and sleep buttons: overlay/etc/acpi/handler.sh, suspend is
+# hos's own zzz (runit-void's stays home)
+acpid
+# alsamixer/amixer beside pipewire; xrandr for external monitors (hbg and
+# hwm read the same RandR state); bluetoothd + bluetoothctl (its D-Bus
+# policy admits the bluetooth group, mkrootfs puts the user in it);
+# chronyd keeps the clock, a service each
+alsa-utils
+xrandr
+bluez
+chrony
 
 # toolchain — /usr/src/hackable is meant to be rebuilt in place
 gcc

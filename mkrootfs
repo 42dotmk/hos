@@ -112,7 +112,7 @@ do_stage() {
     # the live user, baked in: hos:hos with passwordless sudo, root:hos;
     # /etc/default/live.conf tells hos-install whom to remove
     if ! chroot "$rootfs" id hos >/dev/null 2>&1; then
-        groups=$(for g in wheel audio video input storage optical network kvm users; do
+        groups=$(for g in wheel audio video input storage optical network bluetooth kvm users; do
             grep -q "^$g:" "$rootfs/etc/group" && printf '%s,' "$g"; done)
         chroot "$rootfs" useradd -m -G "${groups%,}" -s /bin/zsh hos
     fi

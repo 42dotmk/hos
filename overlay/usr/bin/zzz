@@ -1,0 +1,11 @@
+#!/bin/sh
+# zzz - suspend to RAM. Runs the executables in /etc/zzz.d/suspend before
+# and /etc/zzz.d/resume after; needs root (sysfs), acpid calls it for the
+# lid and the sleep button.
+fail() { echo "zzz: $*" >&2; exit 1; }
+grep -qw mem /sys/power/state || fail "suspend not supported"
+[ -w /sys/power/state ] || fail "not root"
+for h in /etc/zzz.d/suspend/*; do [ -x "$h" ] && "$h"; done
+printf mem >/sys/power/state || fail "suspend failed"
+for h in /etc/zzz.d/resume/*; do [ -x "$h" ] && "$h"; done
+exit 0

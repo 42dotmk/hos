@@ -6,3 +6,6 @@ agetty-tty2
 udevd
 dbus
 NetworkManager
+acpid
+bluetoothd
+chronyd
