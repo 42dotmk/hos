@@ -5,22 +5,34 @@ init copies anything under /updates in the initramfs onto the live root
 before switching to it, so no ISO rebuild is needed to try a change to hsm
 or to overlay/etc/hsm.
 
-    python3 vmtest.py pid1     # services up, sv check, restart, logs, poweroff
+    python3 vmtest.py pid1     # services up, sv check, restart, logs, the
+                               # live autologin into X, poweroff
     python3 vmtest.py reboot   # same, plus a reboot cycle before the poweroff
+    python3 vmtest.py install  # hos-install onto a scratch disk under BIOS
+                               # and under EFI (OVMF), then boot each disk
+                               # through its own grub: ext4 root, services,
+                               # xdm instead of the autologin, the new user
+                               # logs in at the greeter (typed through
+                               # qemu's keyboard) and hwm runs
 
 sv is runit's own binary: hsmd speaks runit's supervise/ protocol, so
-`sv check` exercises that; poweroff/reboot are hos's `hsm` wrappers.
-Needs qemu-system-x86_64 with /dev/kvm, isoinfo (cdrtools), zstd and cc.  Kernel,
-initrd and the console log land in build/vm/."""
-import glob, os, re, socket, subprocess, sys, time
+`sv check` exercises that; poweroff/reboot are hos's `hsm` wrappers. The
+installed disks get a root getty and console=ttyS0 added after hos-install
+is done (the test has no other way in); everything else is as hos-install
+left it. Needs qemu-system-x86_64 with /dev/kvm, isoinfo (cdrtools), zstd,
+cc, and OVMF for the EFI half. Kernel, initrd, console logs and screenshots
+of the greeter and the session land in build/vm/."""
+import atexit, glob, os, re, socket, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 VM = f"{HERE}/build/vm"
 HSM = f"{HERE}/../hsm"
 OVERLAY = f"{HERE}/overlay"
+OVMF = os.environ.get("OVMF", "/usr/share/qemu/edk2-x86_64-code.fd")
 # what the ISO's grub menu passes, minus console=
 BASEARGS = "hos.live=HOS init=/usr/bin/hsmd loglevel=4"
 INJECT = ["etc/hsm/boot", "etc/hsm/shutdown"]
+PASSWORD = "vmtest"
 
 
 def sh(*cmd, **kw):
@@ -85,8 +97,9 @@ def initrd(tag):
     def add(dst, src, mode=0o755):
         e.append((f"updates{dst}", mode, open(src, "rb").read(), None))
 
-    add("/usr/src/hackable/hsm/hsmd", f"{VM}/hsmd")
-    add("/usr/src/hackable/hsm/hsm", f"{VM}/hsm")
+    # over the packaged ones (the hsm package puts them in /usr/bin)
+    add("/usr/bin/hsmd", f"{VM}/hsmd")
+    add("/usr/bin/hsm", f"{VM}/hsm")
     for p in INJECT:
         add("/" + p, f"{OVERLAY}/{p}", os.stat(f"{OVERLAY}/{p}").st_mode & 0o777)
     # a getty on the serial console, logging root in without a password
@@ -114,12 +127,13 @@ class Serial:
         self.s.settimeout(0.2)
 
     def expect(self, pat, timeout):
+        """wait for pat; returns (text before it, the match)"""
         rx, end = re.compile(pat.encode()), time.time() + timeout
         while time.time() < end:
             m = rx.search(self.buf)
             if m:
                 out, self.buf = self.buf[:m.start()], self.buf[m.end():]
-                return out.decode(errors="replace")
+                return out.decode(errors="replace"), m
             try:
                 d = self.s.recv(65536)
                 if d:
@@ -134,28 +148,93 @@ class Serial:
         self.s.sendall(s.encode())
 
 
+class Monitor:
+    """qemu's human monitor on a unix socket: screendump and sendkey. (Not
+    QMP: qemu 11 sets up an io_uring for a -qmp socket, which dies under a
+    small RLIMIT_MEMLOCK; the HMP one needs none.)"""
+
+    def __init__(self, path):
+        for _ in range(100):
+            try:
+                self.s = socket.socket(socket.AF_UNIX)
+                self.s.connect(path)
+                break
+            except OSError:
+                self.s.close()
+                time.sleep(0.1)
+        else:
+            raise SystemExit(f"no qemu monitor at {path}")
+        self.s.settimeout(30)
+        self.prompt()
+
+    def prompt(self):
+        buf = b""
+        while not buf.endswith(b"(qemu) "):
+            d = self.s.recv(4096)
+            if not d:
+                raise SystemExit("qemu monitor closed")
+            buf += d
+        return buf
+
+    def cmd(self, line):
+        self.s.sendall(line.encode() + b"\n")
+        return self.prompt()
+
+    def screenshot(self, path):
+        self.cmd(f"screendump {path} -f png")
+
+    def type(self, text):
+        keys = {"\n": "ret", " ": "spc", "-": "minus", ".": "dot", "/": "slash"}
+        for ch in text:
+            k = keys.get(ch, ch)
+            if ch.isupper():
+                k = f"shift-{ch.lower()}"
+            self.cmd(f"sendkey {k}")
+            time.sleep(0.05)
+
+
 class Machine:
-    def __init__(self, iso, tag):
-        args = BASEARGS + " console=ttyS0,115200"
-        sock = f"/run/user/{os.getuid()}/hos-vmtest-{tag}.sock"  # unix paths: < 108 bytes
-        if os.path.exists(sock):
-            os.unlink(sock)
-        self.q = subprocess.Popen(
-            ["qemu-system-x86_64", "-enable-kvm", "-cpu", "host", "-smp", "4", "-m", "4G",
-             "-cdrom", iso, "-kernel", f"{VM}/vmlinuz", "-initrd", initrd(tag), "-append", args,
-             "-display", "none", "-chardev", f"socket,id=s0,path={sock},server=on,wait=off",
-             "-serial", "chardev:s0"], stdout=open(f"{VM}/qemu.{tag}.log", "wb"),
-            stderr=subprocess.STDOUT)
+    """iso: the live medium; disk: a raw image on virtio; efi: OVMF (as a
+    read-only pflash drive - qemu refuses a code-only image as -bios);
+    kernel: boot the ISO's kernel and the /updates initrd directly (the
+    live system), else the disk's own grub boots"""
+
+    def __init__(self, tag, iso=None, disk=None, efi=False, kernel=True):
+        self.tag = tag
+        run = f"/run/user/{os.getuid()}"  # unix paths: < 108 bytes
+        sock, msock = f"{run}/hos-vmtest-{tag}.sock", f"{run}/hos-vmtest-{tag}.mon"
+        for s in (sock, msock):
+            if os.path.exists(s):
+                os.unlink(s)
+        cmd = ["qemu-system-x86_64", "-enable-kvm", "-cpu", "host", "-smp", "4", "-m", "4G",
+               "-device", "virtio-vga,xres=1280,yres=800", "-display", "none",
+               "-chardev", f"socket,id=s0,path={sock},server=on,wait=off", "-serial", "chardev:s0",
+               "-monitor", f"unix:{msock},server=on,wait=off"]
+        if efi:
+            cmd += ["-drive", f"if=pflash,format=raw,readonly=on,file={OVMF}"]
+        if iso:
+            cmd += ["-cdrom", iso]
+        if disk:
+            cmd += ["-drive", f"file={disk},if=virtio,format=raw"]
+        if kernel:
+            cmd += ["-kernel", f"{VM}/vmlinuz", "-initrd", initrd(tag),
+                    "-append", BASEARGS + " console=ttyS0,115200"]
+        self.q = subprocess.Popen(cmd, stdout=open(f"{VM}/qemu.{tag}.log", "wb"),
+                                  stderr=subprocess.STDOUT)
+        # a failed check or a timeout must not leave the VM running
+        atexit.register(lambda q=self.q: q.poll() is None and q.kill())
         self.ser = Serial(sock, f"{VM}/console.{tag}.log")
+        self.mon = Monitor(msock)
 
     def shell(self):
-        """wait for agetty's autologin, then give bash a prompt we can find"""
+        """wait for agetty's autologin, then give the shell a prompt we can find"""
         self.ser.expect(r"automatic login", 300)
         end = time.time() + 60
         while time.time() < end:
             self.ser.send("\nPS1='HOS''P> '\n")  # the echo must not match the prompt
             try:
                 self.ser.expect(r"HOSP> ", 3)
+                self.ser.buf = b""
                 return
             except TimeoutError:
                 pass
@@ -164,7 +243,7 @@ class Machine:
     def run(self, cmd, timeout=60):
         self.ser.buf = b""
         self.ser.send(cmd + "\n")
-        out = self.ser.expect(r"HOSP> ", timeout)
+        out, _ = self.ser.expect(r"HOSP> ", timeout)
         out = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", out.split("\n", 1)[1] if "\n" in out else "")
         out = out.replace("\r", "")  # the bracketed-paste escape leaves one before the first line
         print(f"$ {cmd}\n{out.strip()}\n", flush=True)
@@ -189,8 +268,30 @@ def check(cond, what):
     return bool(cond)
 
 
+def waitfor(m, cmd, want, tries=30):
+    """rerun cmd until its output contains want (services and X take a while)"""
+    out = ""
+    for _ in range(tries):
+        out = m.run(cmd)
+        if want in out:
+            break
+        time.sleep(2)
+    return out
+
+
+def session(m, user):
+    """what an X session of user looks like: hwm, its autostart, and (under
+    xdm) the environment pam_rundir and Xsession give it"""
+    ok = check("hwm" in waitfor(m, f"pgrep -u {user} -l hwm", "hwm"), f"hwm runs as {user}")
+    time.sleep(8)
+    m.mon.screenshot(f"{VM}/session.{m.tag}.png")
+    ok &= check("htray" in m.run(f"pgrep -u {user} -l htray; pgrep -u {user} -l hnd"),
+                "hwm's autostart ran (htray)")
+    return ok
+
+
 def scenario_pid1(iso, m=None):
-    m = m or Machine(iso, "pid1")
+    m = m or Machine("pid1", iso=iso)
     m.shell()
     ok = check("hsmd" in m.run("cat /proc/1/comm"), "hsmd is pid 1")
     st = m.run("hsm status")
@@ -200,12 +301,15 @@ def scenario_pid1(iso, m=None):
     ok &= check("dbus" in m.run("ls /var/log/hsm"), "logs under /var/log/hsm")
     ok &= check(re.search(r"dbus\s+run", m.run("hsm restart dbus; sleep 2; hsm status | grep dbus")),
                 "hsm restart dbus")
+    # the live session is the autologin on tty1 and startx, not xdm
+    ok &= check(not re.search(r"^xdm\s", m.run("hsm status"), re.M), "xdm not enabled on the live system")
+    ok &= session(m, "hos")
     m.down("poweroff", r"hsmd: poweroff")
     return ok
 
 
 def scenario_reboot(iso):
-    m = Machine(iso, "reboot")
+    m = Machine("reboot", iso=iso)
     m.shell()
     ok = check("hsmd" in m.run("cat /proc/1/comm"), "hsmd is pid 1")
     print("--- reboot", flush=True)
@@ -220,8 +324,91 @@ def scenario_reboot(iso):
     return ok
 
 
+def install(iso, efi):
+    tag = "efi" if efi else "bios"
+    disk = f"{VM}/disk.{tag}.img"
+    if os.path.exists(disk):
+        os.unlink(disk)
+    sh("truncate", "-s", "24G", disk)
+    m = Machine(f"install-{tag}", iso=iso, disk=disk, efi=efi)
+    m.shell()
+    ok = check(("efi" if efi else "none") in m.run("[ -d /sys/firmware/efi ] && echo efi || echo none"),
+               f"booted {'EFI' if efi else 'BIOS'}")
+    print(f"--- hos-install ({tag})", flush=True)
+    m.ser.buf = b""
+    m.ser.send("hos-install -u tester -H hostest /dev/vda\n")
+    m.ser.expect(r"Type the device name to continue: ", 60)
+    m.ser.send("/dev/vda\n")
+    while True:
+        _, hit = m.ser.expect(r"(?i)(new password: ?|== done[^\n]*|\nhos-install: [^\n]*|HOSP> )", 900)
+        what = hit.group(0).decode()
+        if "password" in what.lower():
+            m.ser.send(PASSWORD + "\n")
+        elif "== done" in what:
+            print(what.strip(), flush=True)
+            break
+        else:
+            raise SystemExit(f"hos-install failed: {what.strip()}")
+    m.ser.expect(r"HOSP> ", 60)
+    root = "/dev/vda2" if efi else "/dev/vda1"
+    # the test's way in: a root autologin on ttyS0 (hos-install copied the
+    # live root, the injected getty included) and a serial console
+    m.run(f"mount {root} /mnt && ln -sfn /etc/sv/agetty-ttyS0 /mnt/var/service/agetty-ttyS0 && "
+          "printf 'GETTY_ARGS=\"-L -8 -a root --noclear\"\\nBAUD_RATE=115200\\nTERM_NAME=vt100\\n' "
+          "> /mnt/etc/sv/agetty-ttyS0/conf && "
+          "sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=\"/&console=tty0 console=ttyS0,115200 /' /mnt/etc/default/grub && "
+          "for d in dev proc sys; do mount --rbind /$d /mnt/$d; done && "
+          "chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg 2>&1 | tail -2; "
+          "grep -m1 -E '^\\s+linux' /mnt/boot/grub/grub.cfg; umount -R /mnt", 120)
+    m.down("poweroff", r"hsmd: poweroff")
+
+    m = Machine(f"disk-{tag}", disk=disk, efi=efi, kernel=False)
+    m.shell()
+    ok &= check(re.search(r"^/dev/vda\d ext4", m.run("findmnt -no SOURCE,FSTYPE /"), re.M), "root is ext4 on vda")
+    ok &= check("hostest" in m.run("cat /proc/sys/kernel/hostname"), "hostname from -H")
+    ok &= check("init=/usr/bin/hsmd" in m.run("cat /proc/cmdline"), "grub passed init=/usr/bin/hsmd")
+    ok &= check("hos" not in m.run("getent passwd hos; ls /etc/sudoers.d"), "live user gone")
+    ok &= check("-a " not in m.run("cat /etc/sv/agetty-tty1/conf; ls /etc/profile.d"),
+                "no tty1 autologin")
+    ok &= check("startx" not in m.run("ls /etc/profile.d"), "no startx from tty1")
+    if efi:
+        ok &= check("BOOTX64.EFI" in m.run("ls /boot/efi/EFI/BOOT"), "removable EFI path")
+    st = waitfor(m, "hsm status", "xdm")
+    for s in ("udevd", "dbus", "NetworkManager", "xdm", "agetty-tty1"):
+        ok &= check(re.search(rf"^{s}\s+run", st, re.M), f"{s} runs")
+    ok &= check("Xorg" in waitfor(m, "pgrep -l Xorg", "Xorg"), "Xorg runs under xdm")
+    time.sleep(12)  # the greeter maps a while after X is up
+    m.mon.screenshot(f"{VM}/greeter.{m.tag}.png")
+    m.mon.type("tester\n")
+    # keys typed before PAM's password prompt is up are lost: wait, and
+    # type it again while nobody is logged in (the greeter keeps the name)
+    for _ in range(3):
+        time.sleep(4)
+        m.mon.type(f"{PASSWORD}\n")
+        if "hwm" in waitfor(m, "pgrep -u tester -l hwm", "hwm", tries=10):
+            break
+    ok &= check("hwm" in m.run("pgrep -u tester -l hwm"), "tester logged in at xdm")
+    env = m.run("tr '\\0' '\\n' < /proc/$(pgrep -u tester -x hwm | head -1)/environ | "
+                "grep -E '^(XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|LANG)='")
+    ok &= check("XDG_RUNTIME_DIR=/run/user/" in env, "session has XDG_RUNTIME_DIR (pam_rundir)")
+    ok &= check("DBUS_SESSION_BUS_ADDRESS=" in env, "session has a session bus")
+    ok &= check("LANG=en_US.UTF-8" in env, "session has the locale")
+    ok &= session(m, "tester")
+    m.down("poweroff", r"hsmd: poweroff")
+    return ok
+
+
+def scenario_install(iso):
+    ok = install(iso, efi=False)
+    if os.path.exists(OVMF):
+        ok &= install(iso, efi=True)
+    else:
+        print(f"skip EFI: no {OVMF}")
+    return ok
+
+
 if __name__ == "__main__":
-    scenarios = {"pid1": scenario_pid1, "reboot": scenario_reboot}
+    scenarios = {"pid1": scenario_pid1, "reboot": scenario_reboot, "install": scenario_install}
     if len(sys.argv) != 2 or sys.argv[1] not in scenarios:
         sys.exit(f"usage: vmtest.py {'|'.join(scenarios)}")
     sys.exit(0 if scenarios[sys.argv[1]](prepare()) else 1)

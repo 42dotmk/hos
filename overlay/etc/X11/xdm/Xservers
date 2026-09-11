@@ -1,0 +1,2 @@
+# hos: the one local display, on vt7 (tty1 and tty2 keep their gettys)
+:0 local /usr/bin/X :0 vt7 -nolisten tcp

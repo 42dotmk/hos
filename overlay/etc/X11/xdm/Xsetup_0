@@ -1,0 +1,5 @@
+#!/bin/sh
+# hos: run as root on :0 before the greeter shows - just the ground under
+# it (not hbg: whatever runs here outlives the login, and hwm's autostart
+# would find it and skip the user's own)
+xsetroot -solid '#1a1b26' -cursor_name left_ptr

@@ -151,10 +151,27 @@ repository's key), and the four scripts `mkrootfs`, `mkpkg`, `mkiso`,
   in `SERVICES`, no `down` files.
 - **Live user** is baked into the rootfs at stage (`useradd` in a
   chroot), not created at boot; `/etc/skel` (overlay: `.xinitrc` = `exec
-  hwm`, a stub `.zshrc`, backgrounds) is what it gets. The session starts from
-  `overlay/etc/profile.d/zz-hos-startx.sh` on tty1 (agetty autologin),
-  not exec'd so an X exit drops to a shell. The `zz-` matters: Void's
-  `locale.sh` in profile.d exports LANG, and X must inherit it.
+  hwm`, a stub `.zshrc`, backgrounds) is what it gets. The live session
+  starts from `overlay/etc/profile.d/zz-hos-startx.sh` on tty1 (agetty
+  autologin), not exec'd so an X exit drops to a shell. The `zz-`
+  matters: Void's `locale.sh` in profile.d exports LANG, and X must
+  inherit it.
+- **An installed hos logs in at xdm** (in `PACKAGES` with xrdb,
+  xsetroot, pam_rundir; not in `SERVICES` - the live ISO keeps the
+  autologin). hos-install links Void's own `/etc/sv/xdm` (its `log/`
+  wants runit-void's vlogger; hsmd ignores `log/` dirs, as for dbus and
+  NetworkManager) and removes `zz-hos-startx.sh`, or every console login
+  would start a second X. `overlay/etc/X11/xdm`: `xdm-config` (Void's,
+  pointed at hos's `Xsession` and `Xsetup_0`, no XDMCP), `Xservers`
+  (`:0` on vt7), `Xresources` (the greeter in Iosevka and the splash
+  colours), `Xsetup_0` (`xsetroot` only - not hbg: what runs there
+  outlives the login and hwm's `pgrep -x hbg ||` would skip the user's),
+  `Xsession` (as the user: `/etc/profile`, then `~/.xsession` or
+  `~/.xinitrc` - what startx runs, so both ways in start the same
+  session - else hwm, under `dbus-run-session` when no bus is set; F1 at
+  the greeter is the failsafe hterm). `overlay/etc/pam.d/xdm` is Void's
+  with `pam_rundir` for `pam_elogind` (no elogind here): the session gets
+  `/run/user/UID` and `XDG_RUNTIME_DIR`, which pipewire needs.
 - **Shell and tmux defaults are system-wide**, not in skel: zsh reads
   `overlay/etc/zsh/zshrc`, which sources `zshrc.d/*.zsh` (options,
   completion + fzf bindings, keys, prompt with vcs_info, env, aliases,
@@ -167,6 +184,7 @@ repository's key), and the four scripts `mkrootfs`, `mkpkg`, `mkiso`,
   --one-file-system` of the live root onto the target (so everything
   staged lands there; the medium under /run is another fs), fstab by
   UUID, the live user and its autologin/sudoers/`live.conf` removed,
+  xdm enabled in their place (and tty1's startx profile script gone),
   USER created in the live user's groups (its home then chowned and
   seeded from skel regardless: `useradd -m` leaves a pre-existing home
   alone, and X dies on `.Xauthority` in one the user cannot write),

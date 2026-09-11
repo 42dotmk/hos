@@ -1,0 +1,13 @@
+#%PAM-1.0
+# hos: Void's xdm stack with pam_rundir in place of pam_elogind (hos has
+# no elogind): pam_rundir makes /run/user/UID and hands the session
+# XDG_RUNTIME_DIR, which pipewire needs
+auth		required	pam_unix.so
+auth		required	pam_nologin.so
+auth		required	pam_env.so
+account		required	pam_unix.so
+password	required	pam_unix.so
+session		required	pam_unix.so
+session		required	pam_limits.so
+session		required	pam_loginuid.so
+session		optional	pam_rundir.so

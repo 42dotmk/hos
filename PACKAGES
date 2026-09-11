@@ -60,6 +60,14 @@ mesa-dri
 dejavu-fonts-ttf
 dbus
 NetworkManager
+# the display manager of an installed hos (hos-install enables it; the
+# live system autologs in on tty1 and never starts it): xdm's greeter,
+# xrdb to load its look, xsetroot for its ground, pam_rundir for the
+# session's XDG_RUNTIME_DIR (overlay/etc/pam.d/xdm)
+xdm
+xrdb
+xsetroot
+pam_rundir
 
 # login shell (/etc/default/useradd); hwm's autostart also runs through
 # /bin/zsh -c — without it hbg/htray/hnd never start. The rest are what

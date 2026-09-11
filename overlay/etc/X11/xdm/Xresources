@@ -1,0 +1,45 @@
+! hos: xdm's greeter - its Xaw login box, flat, in the tools' font and
+! the boot splash's colours. xdm loads this with xrdb as root before the
+! greeter shows (DisplayManager*resources in xdm-config).
+
+xlogin*greeting: hos on CLIENTHOST
+xlogin*namePrompt: login\040
+xlogin*passwdPrompt: password\040
+xlogin*fail: no - try again
+xlogin*echoPasswd: true
+xlogin*echoPasswdChar: *
+
+xlogin*greetFace: Iosevka Nerd Font Mono-20:bold
+xlogin*face: Iosevka Nerd Font Mono-14
+xlogin*promptFace: Iosevka Nerd Font Mono-14:bold
+xlogin*failFace: Iosevka Nerd Font Mono-14:bold
+
+xlogin*background: #1a1b26
+xlogin*foreground: #c0caf5
+xlogin*greetColor: #7aa2f7
+xlogin*promptColor: #7aa2f7
+xlogin*failColor: #f7768e
+xlogin*inpColor: #24283b
+xlogin*hiColor: #3b4261
+xlogin*shdColor: #3b4261
+xlogin*borderWidth: 0
+xlogin*frameWidth: 1
+xlogin*innerFramesWidth: 1
+xlogin*sepWidth: 0
+xlogin*useShape: false
+xlogin*logoFileName:
+
+! F1 or ctrl-return logs into the failsafe session (a lone hterm,
+! /etc/X11/xdm/Xsession), ctrl-r restarts the greeter
+xlogin*login.translations: #override \
+	Ctrl<Key>R: abort-display()\n\
+	<Key>F1: set-session-argument(failsafe) finish-field()\n\
+	<Key>Delete: delete-character()\n\
+	<Key>Left: move-backward-character()\n\
+	<Key>Right: move-forward-character()\n\
+	<Key>Home: move-to-begining()\n\
+	<Key>End: move-to-end()\n\
+	Ctrl<Key>KP_Enter: set-session-argument(failsafe) finish-field()\n\
+	<Key>KP_Enter: set-session-argument() finish-field()\n\
+	Ctrl<Key>Return: set-session-argument(failsafe) finish-field()\n\
+	<Key>Return: set-session-argument() finish-field()

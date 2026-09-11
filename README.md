@@ -161,9 +161,11 @@ The ISO is a complete desktop for real hardware, not a demo:
   and the sleep button suspend through hos's own `zzz` (hooks in
   `/etc/zzz.d`), the power button powers off; NetworkManager runs
   without polkit, so `nmcli` works for any local user.
-- **The session.** tty1 autologin runs `startx` from a profile script;
-  `.xinitrc` execs hwm, whose autostart list brings up hbg, htray,
-  hnd, screen locking, the keyboard layout, pipewire and haid.
+- **The session.** On the live system tty1 autologin runs `startx`
+  from a profile script; an installed hos logs in at **xdm** instead
+  (the greeter on tty7, `/etc/X11/xdm`), which runs the same
+  `~/.xinitrc`. It execs hwm, whose autostart list brings up hbg,
+  htray, hnd, screen locking, the keyboard layout, pipewire and haid.
 
 ## Packages
 
@@ -223,6 +225,7 @@ on it is an xbps package.
 make            # hos-<version>-x86_64.iso, no sudo
 make qemu       # boot the newest ISO under kvm
 make vmtest     # boot it headless: hsmd as pid 1, services, sv, reboot, poweroff
+python3 vmtest.py install   # hos-install to a disk (BIOS and EFI), boot it, log in at xdm
 ```
 
 The chain is `rootfs` (xbps installs `PACKAGES` into `build/rootfs`)
@@ -262,9 +265,9 @@ Wipes the disk (it asks you to type the device name), makes a root
 filesystem (and an EFI system partition when booted from EFI), copies
 the live root onto it as-is with the packages, `/usr/src/hackable`
 and the enabled services, writes fstab by UUID, removes the live
-user's autologin and sudo, creates USER in the same groups, asks for
-both passwords, builds the initramfs and installs grub with
-`init=/usr/bin/hsmd`. The installed system boots the same init and the
+user's autologin and sudo, enables xdm (you log in at its greeter),
+creates USER in the same groups, asks for both passwords, builds the
+initramfs and installs grub with `init=/usr/bin/hsmd`. The installed system boots the same init and the
 same pid 1 as the live one. ~130 lines of sh, no menus; keymap,
 timezone and wifi are yours afterwards (`rc.conf`, `/etc/localtime`,
 `nmcli`).

@@ -7,11 +7,12 @@
 # filesystem - and an EFI system partition when booted from EFI - copies the
 # live root onto it as it is (every tool under /usr/src/hackable, the /bin
 # symlinks, fonts, skel, the enabled services), then undoes what makes the
-# live session live: the autologged-in live user goes, USER (default: the
-# name you type) is created in the live user's groups with zsh and
-# /etc/skel, root and USER get passwords, hos-mkinitramfs builds the
-# initramfs for the disk and grub goes on with init=/usr/bin/hsmd
-# (/etc/default/grub).
+# live session live: the autologged-in live user goes, and with it tty1's
+# autologin and startx - an installed hos logs in at xdm (enabled here,
+# /etc/X11/xdm) - USER (default: the name you type) is created in the live
+# user's groups with zsh and /etc/skel, root and USER get passwords,
+# hos-mkinitramfs builds the initramfs for the disk and grub goes on with
+# init=/usr/bin/hsmd (/etc/default/grub).
 # No menus: the choices that matter are the arguments, the rest is asked.
 set -e
 
@@ -97,6 +98,10 @@ rm -f "$target/etc/default/live.conf" "$target/etc/sudoers.d/99-$liveuser" \
     "$target/etc/polkit-1/rules.d/$liveuser.rules"
 sed -i 's/GETTY_ARGS="--noclear -a [^"]*"/GETTY_ARGS="--noclear"/' \
     "$target/etc/sv/agetty-tty1/conf"
+# the display: xdm on vt7 instead of startx from tty1's profile (which
+# would now start a second X from any console login)
+rm -f "$target/etc/profile.d/zz-hos-startx.sh"
+ln -sfn /etc/sv/xdm "$target/var/service/xdm"
 printf '\nhos linux \\r (\\l)\n\n' > "$target/etc/issue" # the live one names hos:hos
 [ -n "$host" ] && echo "$host" > "$target/etc/hostname"
 if ! chroot "$target" id "$user" >/dev/null 2>&1; then
@@ -106,7 +111,9 @@ fi
 # as is: no skel, wrong owner, and xauth cannot even create .Xauthority.
 # Finish it either way.
 home=$(chroot "$target" getent passwd "$user" | cut -d: -f6)
-cp -an "$target/etc/skel/." "$target$home/"
+# (not cp -n: coreutils >= 9.2 exits 1 when -n skips a file, which under
+# set -e ended every install here - useradd -m has just copied skel)
+cp -a --update=none "$target/etc/skel/." "$target$home/"
 chroot "$target" chown -R "$user:$user" "$home"
 echo '%wheel ALL=(ALL:ALL) ALL' > "$target/etc/sudoers.d/wheel"
 chmod 440 "$target/etc/sudoers.d/wheel"
@@ -136,4 +143,4 @@ chroot "$target" grub-mkconfig -o /boot/grub/grub.cfg
 
 sync
 umount -R "$target"
-echo "== done: hos is on $disk. reboot, log in as $user on tty1, hwm starts."
+echo "== done: hos is on $disk. reboot, log in as $user at the xdm greeter, hwm starts."

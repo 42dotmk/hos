@@ -1,0 +1,30 @@
+#!/bin/sh
+# hos: the session xdm starts once you are in, as you. A login shell's
+# environment first (/etc/profile: PATH, LANG from locale.sh, profile.d),
+# then your ~/.xsession if there is one, else your ~/.xinitrc (what startx
+# runs, so both ways in start the same session), else hwm - on a session
+# bus of its own when nothing gave one (hnd is D-Bus activated). F1 at the
+# greeter asks for the failsafe session: a lone hterm. XDG_RUNTIME_DIR
+# comes from pam_rundir (/etc/pam.d/xdm). Everything the session prints
+# lands in ~/.xsession-errors.
+
+errfile=$HOME/.xsession-errors
+if (umask 077 && : > "$errfile") 2>/dev/null; then
+    exec > "$errfile" 2>&1
+fi
+
+. /etc/profile
+
+run() {
+    if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] && command -v dbus-run-session >/dev/null; then
+        exec dbus-run-session -- "$@"
+    fi
+    exec "$@"
+}
+
+[ "$1" = failsafe ] && exec hterm
+for s in "$HOME/.xsession" "$HOME/.xinitrc"; do
+    [ -f "$s" ] && [ -x "$s" ] && run "$s"
+    [ -f "$s" ] && run /bin/sh "$s" # as startx does with a plain file
+done
+run hwm
