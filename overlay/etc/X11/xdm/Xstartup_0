@@ -1,0 +1,7 @@
+#!/bin/sh
+# hos: run as root on :0 once a login succeeds, before the session starts.
+# The greeter's hbg (Xsetup_0) goes first - hwm's autostart only starts
+# the user's own hbg when none runs - then what Void's GiveConsole does.
+# A non-zero exit here would refuse the login.
+pkill -x -u root hbg
+exec /usr/lib64/X11/xdm/GiveConsole

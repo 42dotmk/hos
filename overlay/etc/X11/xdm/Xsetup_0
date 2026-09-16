@@ -1,5 +1,10 @@
 #!/bin/sh
-# hos: run as root on :0 before the greeter shows - just the ground under
-# it (not hbg: whatever runs here outlives the login, and hwm's autostart
-# would find it and skip the user's own)
+# hos: run as root on :0 before the greeter shows - the ground under it.
+# hbg draws /usr/share/hos/xdm/pictures/backgrounds/preffered (hbg's own
+# bgdir under this HOME): the BASE42 logo from https://42.mk/img/base.svg
+# on hos's colours, low on the screen, below the centred login box. hbg's
+# picture lives as long as hbg does, so it keeps running behind the
+# greeter; Xstartup_0 stops it at login, or hwm's autostart would find it
+# and skip the user's own.
 xsetroot -solid '#1a1b26' -cursor_name left_ptr
+HOME=/usr/share/hos/xdm hbg >/dev/null 2>&1 &

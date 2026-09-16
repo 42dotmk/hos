@@ -164,8 +164,15 @@ repository's key), and the four scripts `mkrootfs`, `mkpkg`, `mkiso`,
   would start a second X. `overlay/etc/X11/xdm`: `xdm-config` (Void's,
   pointed at hos's `Xsession` and `Xsetup_0`, no XDMCP), `Xservers`
   (`:0` on vt7), `Xresources` (the greeter in Iosevka and the splash
-  colours), `Xsetup_0` (`xsetroot` only - not hbg: what runs there
-  outlives the login and hwm's `pgrep -x hbg ||` would skip the user's),
+  colours), `Xsetup_0` (the ground: hbg with `HOME=/usr/share/hos/xdm`,
+  so its own bgdir resolves to `overlay/usr/share/hos/xdm/pictures/
+  backgrounds/preffered/base42.png` - 42.mk's BASE42 logo,
+  https://42.mk/img/base.svg, rendered once onto 1920x1080 in the
+  splash colours, low on the screen under the centred box; hbg's
+  picture dies with hbg, so it keeps running behind the greeter),
+  `Xstartup_0` (root, after a good login: `pkill -x -u root hbg`, or
+  hwm's `pgrep -x hbg ||` would skip the user's own, then Void's
+  GiveConsole; a non-zero exit there refuses the login),
   `Xsession` (as the user: `/etc/profile`, then `~/.xsession` or
   `~/.xinitrc` - what startx runs, so both ways in start the same
   session - else hwm, under `dbus-run-session` when no bus is set; F1 at

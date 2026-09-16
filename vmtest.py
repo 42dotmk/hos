@@ -394,6 +394,9 @@ def install(iso, efi):
     ok &= check("DBUS_SESSION_BUS_ADDRESS=" in env, "session has a session bus")
     ok &= check("LANG=en_US.UTF-8" in env, "session has the locale")
     ok &= session(m, "tester")
+    # the greeter's hbg (root, the 42 picture) gave way to the user's own
+    ok &= check("hbg" in m.run("pgrep -u tester -l hbg") and
+                "hbg" not in m.run("pgrep -u root -l hbg"), "the user's hbg replaced the greeter's")
     m.down("poweroff", r"hsmd: poweroff")
     return ok
 
