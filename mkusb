@@ -1,0 +1,85 @@
+#!/bin/sh
+# mkusb - write the newest hos ISO raw onto a usb stick.
+#
+#   mkusb [/dev/sdX]            (env: USB_ALLOW_ROOT=yes)
+#
+# Without a device one is detected: the disks that report themselves
+# removable or on the usb transport, never the one the system is running
+# from. One candidate is used, several are asked about (hmenu when there is
+# a desktop, a numbered list on the terminal otherwise), none is an error
+# with the disks listed. hos's image is hybrid (BIOS and EFI, MBR), so dd is
+# the whole install - and dd is the only step that needs root: it asks for
+# it through sudo, so you see the device and its size before it writes.
+set -e
+
+iso=$(ls -t hos-*.iso 2>/dev/null | head -1)
+[ -n "$iso" ] || { echo "mkusb: no ISO here: run make first" >&2; exit 1; }
+
+# the disk the system runs from, so it is never a candidate and never a
+# target: /dev/nvme0n1 for / on /dev/nvme0n1p2, the device itself for the
+# live ISO's loop-mounted squashfs
+root=$(findmnt -no SOURCE / | head -1)
+rootdisk=$(lsblk -dno PKNAME "$root" 2>/dev/null || true)
+[ -n "$rootdisk" ] || rootdisk=$root
+case $rootdisk in /*) ;; *) rootdisk=/dev/$rootdisk ;; esac
+rootdisk=$(readlink -f "$rootdisk")
+
+candidates() {
+    if [ "$USB_ALLOW_ROOT" = yes ]; then
+        devs=$(lsblk -dpno NAME)
+    else
+        devs=$(lsblk -dpno NAME,RM,TRAN | awk '$2 == 1 || $3 == "usb" { print $1 }')
+    fi
+    for d in $devs; do
+        [ "$(readlink -f "$d")" = "$rootdisk" ] && continue
+        printf '%s|%s\n' "$d" "$(lsblk -dpno NAME,MODEL,SIZE "$d" | tr -s ' ')"
+    done
+}
+
+dev=$1
+if [ -z "$dev" ]; then
+    list=$(candidates)
+    n=$(printf '%s\n' "$list" | grep -c . || true)
+    if [ "$n" = 0 ]; then
+        echo "mkusb: no usb stick found: plug one in, or name it:" >&2
+        echo "             mkusb /dev/sdX   (USB_ALLOW_ROOT=yes for a fixed disk)" >&2
+        lsblk -o NAME,SIZE,TYPE,TRAN,LABEL,MODEL >&2
+        exit 1
+    elif [ "$n" = 1 ]; then
+        dev=$(printf '%s\n' "$list" | cut -d'|' -f1)
+        echo "mkusb: $(printf '%s\n' "$list" | cut -d'|' -f2)"
+    elif command -v hmenu >/dev/null 2>&1; then
+        tmp=$(mktemp) || exit 1
+        printf '%s\n' "$list" >"$tmp"
+        pick=$(hmenu --title "Write $iso to which device?" -p "cat $tmp") || { rm -f "$tmp"; exit 1; }
+        rm -f "$tmp"
+        dev=$(printf '%s\n' "$pick" | cut -d'|' -f1)
+    elif [ -t 0 ]; then
+        printf '%s\n' "$list" | awk -F'|' '{ printf "  %d) %s\n", NR, $2 }' >&2
+        printf 'device number, or /dev/... : ' >&2
+        read -r answer || exit 1
+        case $answer in
+        '' | *[!0-9]*) dev=$answer ;;
+        *) dev=$(printf '%s\n' "$list" | sed -n "${answer}p" | cut -d'|' -f1) ;;
+        esac
+    else
+        echo "mkusb: several devices and nowhere to ask: name one" >&2
+        printf '%s\n' "$list" | awk -F'|' '{ print "  " $1 }' >&2
+        exit 1
+    fi
+fi
+
+[ -n "$dev" ] || { echo "mkusb: no device chosen" >&2; exit 1; }
+[ -b "$dev" ] || { echo "mkusb: not a block device: $dev" >&2; exit 1; }
+[ -z "$(lsblk -dno PKNAME "$dev")" ] \
+    || { echo "mkusb: $dev is a partition: give the whole device" >&2; exit 1; }
+[ "$(readlink -f "$dev")" != "$rootdisk" ] \
+    || { echo "mkusb: refusing $dev: that is the disk the system runs from" >&2; exit 1; }
+[ -z "$(lsblk -nrno MOUNTPOINTS "$dev")" ] \
+    || { echo "mkusb: refusing $dev: it is mounted (umount it first)" >&2; exit 1; }
+
+lsblk -dpno NAME,MODEL,SIZE,LABEL "$dev" >&2
+echo "mkusb: writing $iso ($(du -h "$iso" | cut -f1)) to $dev" >&2
+sudo dd if="$iso" of="$dev" bs=4M status=progress conv=fsync
+sync
+echo "mkusb: done: $dev is a bootable hos"

@@ -224,6 +224,8 @@ on it is an xbps package.
 ```sh
 make            # hos-<version>-x86_64.iso, no sudo
 make qemu       # boot the newest ISO under kvm
+make usb-install                # write the newest ISO onto a usb stick
+make usb-install USB=/dev/sdX   # ... when detection cannot know you mean it
 make vmtest     # boot it headless: hsmd as pid 1, services, sv, reboot, poweroff
 python3 vmtest.py install   # hos-install to a disk (BIOS and EFI), boot it, log in at xdm
 ```

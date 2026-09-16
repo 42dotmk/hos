@@ -9,6 +9,7 @@
 # make stage      overlay, packages, sources, fonts, user, services into the rootfs
 # make initramfs  build/initramfs from init/ and the rootfs's modules
 # make qemu       boot the newest ISO with kvm
+# make usb-install USB=/dev/sdX   the ISO dd'd onto a stick (asks for sudo)
 # make vmtest     boot it headless with a fresh hsmd injected, check init works
 # make sign       sign build/repo with KEY (the private key CI holds as a secret)
 # make clean      remove build/; distclean also removes ISOs
@@ -104,6 +105,13 @@ qemu:
 		-device virtio-vga,xres=$(XRES),yres=$(YRES) \
 		-cdrom "$$(ls -t hos-*.iso | head -1)"
 
+# write the newest ISO raw onto a usb stick: mkusb does the work (detects
+# the stick, refuses partitions, mounted devices and the disk hos runs from,
+# asks for a pick when there are several). USB= names the device when
+# detection cannot know you mean it.
+usb-install:
+	./mkusb $(USB)
+
 # boot the newest ISO headless with a fresh hsmd injected and check that
 # it works as init (see vmtest.py)
 vmtest:
@@ -118,4 +126,4 @@ clean:
 distclean: clean
 	rm -f hos-*.iso
 
-.PHONY: all projects rootfs packages sign stage initramfs iso install-host print-projects qemu vmtest clean distclean
+.PHONY: all projects rootfs packages sign stage initramfs iso install-host print-projects qemu usb-install vmtest clean distclean
