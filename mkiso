@@ -22,7 +22,10 @@ cp "$initramfs" "$isodir/boot/initramfs"
 cp "$SPLASH" "$isodir/boot/splash.png"
 
 echo "mkiso: squashfs"
-mksquashfs "$rootfs" "$isodir/hos.sfs" -comp xz -Xbcj x86 -b 1M \
+# zstd, not xz: ~5% bigger, but it unpacks ~8x faster on one core (31 s
+# against 4 s for the whole root), and every live read and the
+# installer's copy of the root go through it
+mksquashfs "$rootfs" "$isodir/hos.sfs" -comp zstd -Xcompression-level 19 -b 1M \
     -noappend -quiet -no-progress
 
 cat > "$isodir/boot/grub/grub.cfg" <<CFG

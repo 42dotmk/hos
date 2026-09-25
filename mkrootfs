@@ -116,7 +116,10 @@ do_stage() {
             grep -q "^$g:" "$rootfs/etc/group" && printf '%s,' "$g"; done)
         chroot "$rootfs" useradd -m -G "${groups%,}" -s /bin/zsh hos
     fi
-    printf 'root:hos\nhos:hos\n' | chroot "$rootfs" chpasswd
+    # -c: Void's chpasswd hands a plain password to PAM, whose chpasswd
+    # stack is pam_permit - it exits 0 and sets nothing; with a crypt
+    # method it hashes and writes the shadow itself
+    printf 'root:hos\nhos:hos\n' | chroot "$rootfs" chpasswd -c SHA512
     printf 'hos ALL=(ALL:ALL) NOPASSWD: ALL\n' > "$rootfs/etc/sudoers.d/99-hos"
     chmod 440 "$rootfs/etc/sudoers.d/99-hos"
     echo USERNAME=hos > "$rootfs/etc/default/live.conf"

@@ -384,7 +384,10 @@ static void mountlive(const char *dev) {
     mountor(dev, medium, "iso9660", MS_RDONLY, NULL);
     join(file, sizeof(file), medium, sfsfile);
     setuploop(file, loopdev, sizeof(loopdev));
-    mountor(loopdev, sfsdir, "squashfs", MS_RDONLY, NULL);
+    /* one decompressor per cpu; a kernel built without the choice at mount
+       time rejects the option, and gets its default */
+    if (mount(loopdev, sfsdir, "squashfs", MS_RDONLY, "threads=percpu") < 0)
+        mountor(loopdev, sfsdir, "squashfs", MS_RDONLY, NULL);
     mountor("tmpfs", overlaydir, "tmpfs", 0, "mode=0755");
     join(upper, sizeof(upper), overlaydir, "upper");
     join(work, sizeof(work), overlaydir, "work");

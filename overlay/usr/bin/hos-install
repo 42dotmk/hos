@@ -1,69 +1,259 @@
 #!/bin/sh
-# hos-install - put the running live system on a disk.
+# hos-install - put the running live system on a disk or a partition.
 #
-# usage: hos-install [-u USER] [-H HOSTNAME] DISK
+# usage: hos-install [-u USER] [-H HOSTNAME] [-E] [-f] [TARGET]
 #
-# Wipes DISK (a whole device: /dev/sda, /dev/nvme0n1), gives it a root
-# filesystem - and an EFI system partition when booted from EFI - copies the
-# live root onto it as it is (every tool under /usr/src/hackable, the /bin
-# symlinks, fonts, skel, the enabled services), then undoes what makes the
-# live session live: the autologged-in live user goes, and with it tty1's
-# autologin and startx - an installed hos logs in at xdm (enabled here,
-# /etc/X11/xdm) - USER (default: the name you type) is created in the live
-# user's groups with zsh and /etc/skel, root and USER get passwords,
-# hos-mkinitramfs builds the initramfs for the disk and grub goes on with
-# init=/usr/bin/hsmd (/etc/default/grub).
-# No menus: the choices that matter are the arguments, the rest is asked.
+# TARGET decides what is touched, and nothing else is:
+#   a whole disk (/dev/sda, /dev/nvme0n1)  wiped: a new partition table, a
+#       root filesystem and, when booted from EFI, an EFI system partition
+#   a partition (/dev/sda3)                only it is formatted; under EFI
+#       the disk's existing EFI system partition is reused, and formatted
+#       only if you say so when asked (or give -E): a clean start, but
+#       every other system booting from it stops booting
+#   -f DISK                                a new root partition in the
+#       largest free space on DISK, the other partitions left as they are
+# Without TARGET the disks, their partitions and free space are listed and
+# the target asked for.
+#
+# Then it copies the live root onto the new root as it is (every tool under
+# /usr/src/hackable, the /bin symlinks, fonts, skel, the enabled services),
+# and undoes what makes the live session live: the autologged-in live user
+# goes, and with it tty1's autologin and startx - an installed hos logs in
+# at xdm (enabled here, /etc/X11/xdm) - USER (default: the name you type)
+# is created in the live user's groups with zsh and /etc/skel, root and
+# USER get passwords, hos-mkinitramfs builds the initramfs for the disk and
+# grub goes on with init=/usr/bin/hsmd (/etc/default/grub).
+# No menus: the choices that matter are the arguments, the rest is asked,
+# all of it before anything is written.
 set -e
 
 usage() {
-    echo "usage: hos-install [-u USER] [-H HOSTNAME] DISK" >&2
+    echo "usage: hos-install [-u USER] [-H HOSTNAME] [-E] [-f] [TARGET]" >&2
+    exit 1
+}
+die() {
+    echo "hos-install: $*" >&2
     exit 1
 }
 
-user= host=
-while getopts u:H: opt; do
+user= host= free= espfmt=
+while getopts u:H:Ef opt; do
     case $opt in
     u) user=$OPTARG ;;
     H) host=$OPTARG ;;
+    f) free=1 ;;
+    E) espfmt=1 ;;
     *) usage ;;
     esac
 done
 shift $((OPTIND - 1))
-[ $# -eq 1 ] || usage
-disk=$1
-[ "$(id -u)" -eq 0 ] || { echo "hos-install: run as root" >&2; exit 1; }
-[ -b "$disk" ] || { echo "hos-install: $disk: not a block device" >&2; exit 1; }
-live=$(findmnt -no SOURCE /run/hos/medium 2>/dev/null || true)
-case $live in "$disk"*) echo "hos-install: $disk is the live medium" >&2; exit 1 ;; esac
+[ $# -le 1 ] || usage
+[ "$(id -u)" -eq 0 ] || die "run as root"
 
-target=/mnt/hos
+ESP_GPT=c12a7328-f81f-11d2-ba4b-00a0c93ec93b
+BIOSBOOT_GPT=21686148-6449-6e6f-744e-656564454649
+live=$(findmnt -no SOURCE /run/hos/medium 2>/dev/null || true)
+livedisk=
+[ -n "$live" ] && livedisk=/dev/$(lsblk -no PKNAME "$live" 2>/dev/null | head -1)
+[ "$livedisk" = /dev/ ] && livedisk=$live
+
+# the free areas of a disk, "START SECTORS SIZE" per line, largest first
+freeareas() {
+    sfdisk -qF "$1" 2>/dev/null | awk 'NF >= 4 && $1 ~ /^[0-9]+$/ { print $1, $3, $4 }' |
+        sort -k2,2nr
+}
+
+if [ $# -eq 0 ]; then
+    echo "Disks and partitions:"
+    lsblk -e 7,11 -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINTS
+    for d in $(lsblk -dnpe 7,11 -o NAME); do
+        [ "$d" = "$livedisk" ] && continue
+        freeareas "$d" | while read -r _ _ size; do
+            echo "free space on $d: $size"
+        done
+    done
+    echo
+    echo "Install to: a disk (wiped), a partition (only it is formatted),"
+    printf 'or "free DISK" (a new partition in its largest free space): '
+    read -r answer
+    case $answer in
+    "free "*) free=1; set -- "${answer#free }" ;;
+    "") die "aborted" ;;
+    *) set -- "$answer" ;;
+    esac
+fi
+dev=$1
+[ -b "$dev" ] || die "$dev: not a block device"
+
 efi=
 [ -d /sys/firmware/efi ] && efi=1
+case $(lsblk -dno TYPE "$dev") in
+disk) disk=$dev mode=wipe; [ -n "$free" ] && mode=free ;;
+part) disk=/dev/$(lsblk -no PKNAME "$dev"); mode=part
+    [ -z "$free" ] || die "-f wants a disk, $dev is a partition" ;;
+*) die "$dev: neither a disk nor a partition" ;;
+esac
+[ "$disk" = "$livedisk" ] && die "$disk is the live medium"
 case $disk in *[0-9]) p=p ;; *) p= ;; esac
+label=$(lsblk -dno PTTYPE "$disk")
 
-echo "This wipes $disk:"
-lsblk -o NAME,SIZE,MODEL "$disk"
-printf 'Type the device name to continue: '
+# the EFI system partition on the disk
+findesp() {
+    lsblk -lnpo NAME,PARTTYPE "$disk" | awk -v t=$ESP_GPT 'tolower($2) == t || $2 == "0xef" { print $1; exit }'
+}
+
+ss=$(cat "/sys/block/${disk##*/}/queue/logical_block_size")
+espdev= rootdev= boot= bootdev=
+case $mode in
+wipe)
+    what="This wipes all of $disk:"
+    ;;
+part)
+    findmnt -rno TARGET -S "$dev" >/dev/null && die "$dev is mounted; unmount it first"
+    grep -q "^$dev " /proc/swaps && die "$dev is in use as swap"
+    rootdev=$dev
+    what="This formats $dev (ext4, as hos's root); the rest of $disk is left alone"
+    ;;
+free)
+    set -- $(freeareas "$disk" | head -1)
+    [ -n "$1" ] || die "$disk has no free space"
+    fstart=$1 fsectors=$2
+    what="This adds a partition in the free space of $disk and puts hos on it; the other partitions are left alone"
+    ;;
+esac
+if [ "$mode" != wipe ]; then
+    [ -n "$label" ] || die "$disk has no partition table; give the whole disk to wipe it"
+    # what the firmware boots: an EFI system partition, or grub's core in a
+    # BIOS boot partition on a gpt disk booted by BIOS (a dos disk keeps it
+    # in the gap before the first partition). A disk that only ever held
+    # files has neither, and gets it made in its free space.
+    if [ -n "$efi" ]; then
+        espdev=$(findesp)
+        [ "$espdev" = "$dev" ] && die "$dev is the EFI system partition"
+        [ -n "$espdev" ] || boot="$((512 * 1024 * 1024 / ss)) uefi 512M-EFI-system-partition"
+    elif [ "$label" = gpt ] && ! lsblk -lnpo PARTTYPE "$disk" | grep -qix $BIOSBOOT_GPT; then
+        boot="$((1024 * 1024 / ss)) $BIOSBOOT_GPT 1M-BIOS-boot-partition"
+    fi
+fi
+if [ -n "$boot" ]; then
+    set -- $boot
+    bsectors=$1 btype=$2 bwhat=$(echo "$3" | tr - ' ')
+    if [ "$mode" = free ]; then
+        # off the front of the area hos gets
+        bstart=$fstart fstart=$((fstart + bsectors)) fsectors=$((fsectors - bsectors))
+    else
+        set -- $(freeareas "$disk" | head -1)
+        [ -n "$1" ] && [ "$2" -ge "$bsectors" ] ||
+            die "$disk has no ${bwhat#* } to boot from and no free space for one"
+        bstart=$1
+    fi
+    what="$what, plus a $bwhat in its free space"
+fi
+if [ "$mode" = free ]; then
+    [ "$fsectors" -ge $((8 * 1024 * 1024 * 1024 / ss)) ] ||
+        die "the largest free space on $disk leaves hos $((fsectors * ss / 1024 / 1024))M; hos wants 8G"
+fi
+if [ "$label" = dos ]; then
+    # four primaries, and a failed second append would strand the first
+    n=0
+    [ -n "$boot" ] && n=$((n + 1))
+    [ "$mode" = free ] && n=$((n + 1))
+    used=$(sfdisk -d "$disk" | sed -n 's/^[^ ]*[^0-9]\([1-4]\) :.*/\1/p' | wc -l)
+    [ $((used + n)) -le 4 ] || die "$disk's dos table has no room for $n more primary partition(s)"
+fi
+
+echo "$what:"
+lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINTS "$disk"
+[ -n "$espdev" ] && [ -z "$bootdev$boot" ] && echo "grub goes on $espdev, the disk's EFI system partition."
+[ -z "$efi" ] && [ "$mode" != wipe ] &&
+    echo "grub replaces the boot code of $disk; other systems on it boot through hos's grub only if you add them."
+printf 'Type %s to continue: ' "$dev"
 read -r answer
-[ "$answer" = "$disk" ] || { echo "aborted"; exit 1; }
+[ "$answer" = "$dev" ] || die "aborted"
 if [ -z "$user" ]; then
     printf 'User to create: '
     read -r user
-    [ -n "$user" ] || { echo "aborted"; exit 1; }
+    [ -n "$user" ] || die "aborted"
 fi
 
-echo "== partitioning"
-umount -R "$target" 2>/dev/null || true
-if [ -n "$efi" ]; then
-    printf 'label: gpt\nsize=512M, type=uefi\ntype=linux\n' | sfdisk -q "$disk"
-    espdev=$disk${p}1 rootdev=$disk${p}2
-else
-    printf 'label: dos\ntype=83, bootable\n' | sfdisk -q "$disk"
-    rootdev=$disk${p}1
+# every question before the copy, so the install then runs unattended
+askpw() {
+    while :; do
+        stty -echo
+        printf '%s password: ' "$1" >&2; read -r a; echo >&2
+        printf 'again: ' >&2; read -r b; echo >&2
+        stty echo
+        [ -n "$a" ] && [ "$a" = "$b" ] && break
+        echo "empty or not the same, again" >&2
+    done
+    printf '%s' "$a"
+}
+# an existing ESP is kept as it is unless asked: formatting it is a
+# clean start, and the end of every other system that boots from it
+if [ -n "$espdev" ] && [ -z "$boot" ]; then
+    findmnt -rno TARGET -S "$espdev" >/dev/null && die "$espdev is mounted; unmount it first"
+    if [ -z "$espfmt" ]; then
+        m=$(mktemp -d)
+        held=
+        if mount -o ro "$espdev" "$m" 2>/dev/null; then
+            held=$(ls "$m/EFI" 2>/dev/null | paste -sd' ' -)
+            umount "$m"
+        fi
+        rmdir "$m"
+        echo "$espdev, the EFI system partition, holds the boot files of: ${held:-nothing}"
+        printf 'Format it for a clean start? Whatever boots from it stops booting. [y/N] '
+        read -r answer
+        case $answer in [yY]*) espfmt=1 ;; esac
+    fi
 fi
+
+rootpw=$(askpw root)
+userpw=$(askpw "$user")
+
+target=/mnt/hos
+# the time of each phase, so an install's speed is a number, not an
+# impression; the table is printed at the end and kept in the new system
+t0=$(date +%s.%N) tp=$t0 pname= times=
+phase() {
+    now=$(date +%s.%N)
+    [ -n "$pname" ] && times="$times$(awk -v a="$tp" -v b="$now" -v n="$pname" \
+        'BEGIN { printf "  %-22s %6.1fs", n, b - a }')
+"
+    pname=$1 tp=$now
+    [ -n "$1" ] && echo "== $1"
+    return 0
+}
+phase partitioning
+umount -R "$target" 2>/dev/null || true
+# a partition appended at START, SECTORS long, of TYPE: its device
+addpart() {
+    before=$(lsblk -lnpo NAME "$disk")
+    echo "start=$1, size=$2, type=$3" | sfdisk -q --append "$disk"
+    udevadm settle 2>/dev/null || sleep 1
+    new=$(lsblk -lnpo NAME "$disk" | grep -vxF "$before" | head -1)
+    [ -b "$new" ] || die "the new partition on $disk did not appear"
+    echo "$new"
+}
+case $mode in
+wipe)
+    if [ -n "$efi" ]; then
+        printf 'label: gpt\nsize=512M, type=uefi\ntype=linux\n' | sfdisk -q "$disk"
+        espdev=$disk${p}1 rootdev=$disk${p}2
+    else
+        printf 'label: dos\ntype=83, bootable\n' | sfdisk -q "$disk"
+        rootdev=$disk${p}1
+    fi
+    ;;
+*)
+    [ -n "$boot" ] && bootdev=$(addpart "$bstart" "$bsectors" "$btype")
+    [ -n "$efi" ] && [ -n "$bootdev" ] && espdev=$bootdev
+    [ "$mode" = free ] && rootdev=$(addpart "$fstart" "$fsectors" linux)
+    ;;
+esac
 udevadm settle 2>/dev/null || sleep 1 # partition nodes appear
-[ -n "$efi" ] && mkfs.vfat -F32 "$espdev" >/dev/null
+# an ESP hos made is formatted; one that was there only when asked
+[ -n "$efi" ] && { [ "$mode" = wipe ] || [ -n "$bootdev" ] || [ -n "$espfmt" ]; } &&
+    mkfs.vfat -F32 "$espdev" >/dev/null
 mkfs.ext4 -q -F "$rootdev"
 mkdir -p "$target"
 mount "$rootdev" "$target"
@@ -72,19 +262,19 @@ if [ -n "$efi" ]; then
     mount "$espdev" "$target/boot/efi"
 fi
 
-echo "== copying the live root (a few minutes)"
+phase "copying the live root"
 # --one-file-system keeps /proc, /sys, /dev, /run, /tmp and $target out
 tar -C / --one-file-system --xattrs --warning=no-file-changed -cf - . |
     tar -C "$target" --xattrs --xattrs-include='*' -xpf -
 
-echo "== fstab"
+phase fstab
 {
     echo "UUID=$(blkid -s UUID -o value "$rootdev") / ext4 defaults 0 1"
     [ -n "$efi" ] && echo "UUID=$(blkid -s UUID -o value "$espdev") /boot/efi vfat defaults 0 2"
     echo "tmpfs /tmp tmpfs defaults,nosuid,nodev 0 0"
 } > "$target/etc/fstab"
 
-echo "== users"
+phase users
 liveuser=$(sed -n 's/^USERNAME=//p' /etc/default/live.conf 2>/dev/null)
 groups=$(id -Gn "$liveuser" 2>/dev/null | tr ' ' '\n' | grep -vx "$liveuser" | paste -sd, -)
 for f in dev proc sys; do
@@ -117,30 +307,41 @@ cp -a --update=none "$target/etc/skel/." "$target$home/"
 chroot "$target" chown -R "$user:$user" "$home"
 echo '%wheel ALL=(ALL:ALL) ALL' > "$target/etc/sudoers.d/wheel"
 chmod 440 "$target/etc/sudoers.d/wheel"
-echo "root password:"
-chroot "$target" passwd root
-echo "$user password:"
-chroot "$target" passwd "$user"
+# -c: without a crypt method Void's chpasswd goes through PAM, whose
+# chpasswd stack is pam_permit - exit 0, nothing set, nobody can log in
+printf 'root:%s\n%s:%s\n' "$rootpw" "$user" "$userpw" | chroot "$target" chpasswd -c SHA512
+for u in root "$user"; do
+    grep -q "^$u:\\\$" "$target/etc/shadow" || die "$u's password did not reach /etc/shadow"
+done
 
-echo "== initramfs"
+phase initramfs
 # root=UUID= from grub, found by hos's init; kernel updates redo this
 # through /etc/kernel.d
 for k in "$target"/lib/modules/*; do
     chroot "$target" hos-mkinitramfs "${k##*/}"
 done
 
-echo "== grub"
+phase grub
 if [ -n "$efi" ]; then
     chroot "$target" grub-install --target=x86_64-efi --efi-directory=/boot/efi \
         --bootloader-id=hos --recheck
-    # also the removable-media path, for firmware that forgets NVRAM entries
-    chroot "$target" grub-install --target=x86_64-efi --efi-directory=/boot/efi \
-        --removable
+    # also the removable-media path, for firmware that forgets NVRAM
+    # entries - unless the ESP has one already: that is another system's
+    if [ ! -e "$target/boot/efi/EFI/BOOT/BOOTX64.EFI" ]; then
+        chroot "$target" grub-install --target=x86_64-efi --efi-directory=/boot/efi \
+            --removable
+    fi
 else
     chroot "$target" grub-install "$disk"
 fi
 chroot "$target" grub-mkconfig -o /boot/grub/grub.cfg
 
+phase sync
 sync
+phase
+total=$(awk -v a="$t0" -v b="$(date +%s.%N)" 'BEGIN { printf "%.1f", b - a }')
+printf 'hos-install on %s, %s\n%s  %-22s %6ss\n' "$rootdev" "$(date)" "$times" total "$total" \
+    > "$target/var/log/hos-install.times"
 umount -R "$target"
-echo "== done: hos is on $disk. reboot, log in as $user at the xdm greeter, hwm starts."
+printf '%s' "$times"
+echo "== done in ${total}s: hos is on $rootdev. reboot, log in as $user at the xdm greeter, hwm starts."

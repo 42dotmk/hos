@@ -73,12 +73,20 @@ repository's key), and the four scripts `mkrootfs`, `mkpkg`, `mkiso`,
 - `make qemu` — boot the newest ISO with kvm, 4 cpus, 4G, on a virtio-vga
   whose preferred mode is the host's primary monitor resolution (xrandr;
   1920x1080 without X), so console and X come up at native size.
-- `make vmtest` / `python3 vmtest.py pid1|reboot` — boot the newest ISO
+- `make vmtest` / `python3 vmtest.py pid1|reboot|install|keep` — boot the newest ISO
   headless under qemu with a freshly built static hsmd, the boot scripts
   and a serial getty injected through `/updates` (a cpio appended to the
   initramfs; the init copies it over the new root), and drive the serial
   console: services up, `sv check`, restart, logs, poweroff; a reboot
-  cycle. Needs isoinfo and /dev/kvm. Kernel, initramfs and console logs
+  cycle. `install` runs hos-install (injected too, so no ISO rebuild)
+  onto a wiped scratch disk under BIOS and EFI and boots it to a login
+  at xdm; `keep` does the same into a partition picked at the prompt
+  (BIOS), into a partition of a gpt disk with no ESP (EFI: hos makes
+  one) and into free space beside an existing ESP with another system's
+  fallback loader (EFI, which must survive untouched), and checks the
+  partitions it had to leave alone still hold their files. Run
+  both after touching hos-install. Needs isoinfo and /dev/kvm. Kernel,
+  initramfs and console logs
   land in `build/vm/`. This is the check to run after touching `init/`,
   `overlay/etc/hsm` or hsm.
 - Knobs: `VERSION=` (default `git describe`; names the ISO, lands in
@@ -186,8 +194,24 @@ repository's key), and the four scripts `mkrootfs`, `mkpkg`, `mkiso`,
   `~/.zshrc`; tmux reads `overlay/etc/tmux.conf` before the user's. Both
   are stripped from the author's dotfiles and reference only what is in
   `PACKAGES` (fzf, ripgrep, xclip, pass, yazi, hed) — keep it that way.
-- **hos-install** (`overlay/usr/bin`, ~130 lines of sh, no menus):
-  sfdisk (gpt + ESP under EFI, dos otherwise), mkfs, `tar
+- **hos-install** (`overlay/usr/bin`, ~250 lines of sh, no menus):
+  the target is a whole disk (wiped: sfdisk gpt + ESP under EFI, dos
+  otherwise), a partition (only it is formatted), or `-f DISK` (a
+  partition appended in the largest `sfdisk -F` area); no argument lists
+  disks and free space and asks. On a partition or free space under EFI
+  the disk's existing ESP is mounted, never formatted, and grub's
+  `--removable` copy goes on only when the ESP has no
+  `EFI/BOOT/BOOTX64.EFI` yet (an existing one is another system's; hos
+  then boots by the NVRAM entry grub-install makes). Before anything is
+  written it lists the ESP's `EFI/` directories and asks whether to
+  format it for a clean start (default no; `-E` is yes), after which it
+  counts as hos's own. Every phase is timed: the table is printed at
+  the end and kept in `/var/log/hos-install.times`. A disk that has no ESP (EFI), or is gpt with no BIOS boot
+  partition (BIOS), gets one made in its largest free area (off the
+  front of hos's area with `-f`); no room refuses before writing, as
+  does a dos table without enough free primaries.
+  No os-prober: other systems on the disk are not in hos's grub menu.
+  Then mkfs, `tar
   --one-file-system` of the live root onto the target (so everything
   staged lands there; the medium under /run is another fs), fstab by
   UUID, the live user and its autologin/sudoers/`live.conf` removed,
@@ -195,13 +219,23 @@ repository's key), and the four scripts `mkrootfs`, `mkpkg`, `mkiso`,
   USER created in the live user's groups (its home then chowned and
   seeded from skel regardless: `useradd -m` leaves a pre-existing home
   alone, and X dies on `.Xauthority` in one the user cannot write),
-  passwords asked,
+  passwords set with `chpasswd -c SHA512` and checked in
+  `/etc/shadow` (plain `chpasswd` on Void goes through PAM, whose
+  chpasswd stack is `pam_permit`: exit 0, nothing set - mkrootfs's
+  `root:hos` was never set that way until it got `-c` too),
   `hos-mkinitramfs` per kernel in the target, grub with
   `--bootloader-id=hos` plus `--removable`, `grub-mkconfig` reading
   `overlay/etc/default/grub` (`init=/usr/bin/hsmd`). The installed
   system boots through the same init with `root=UUID=`; its boot script
   then fscks and mounts fstab. Interactive on purpose (type the disk
-  name, `passwd` twice). The EFI branch has not run on hardware.
+  name, root's and USER's passwords), but every question comes before
+  the copy, so the rest runs unattended. The EFI branch has not run on
+  hardware.
+- **Install speed.** The copy is bound by squashfs decompression, so
+  `mkiso` packs zstd-19 rather than xz (~5% bigger, ~8x faster to read
+  on one core) and the init mounts it `threads=percpu` (falling back to
+  a plain mount). The initramfs rebuild is ~2 s and not worth reusing
+  the ISO's.
 - Branding: `overlay/etc/os-release` and `overlay/etc/issue`; fastfetch
   reads `ID=hos` but has no logo for it, so
   `overlay/etc/fastfetch/config.jsonc` points it at

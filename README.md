@@ -228,6 +228,7 @@ make usb-install                # write the newest ISO onto a usb stick
 make usb-install USB=/dev/sdX   # ... when detection cannot know you mean it
 make vmtest     # boot it headless: hsmd as pid 1, services, sv, reboot, poweroff
 python3 vmtest.py install   # hos-install to a disk (BIOS and EFI), boot it, log in at xdm
+python3 vmtest.py keep      # the same beside partitions it must leave alone
 ```
 
 The chain is `rootfs` (xbps installs `PACKAGES` into `build/rootfs`)
@@ -260,17 +261,29 @@ private half of `hos-repo.pub`).
 ## Install to disk
 
 ```sh
-sudo hos-install [-u USER] [-H HOSTNAME] /dev/sdX
+sudo hos-install [-u USER] [-H HOSTNAME] /dev/sdX          # the whole disk, wiped
+sudo hos-install [-u USER] [-H HOSTNAME] [-E] /dev/sdX3    # only that partition
+sudo hos-install [-u USER] [-H HOSTNAME] [-E] -f /dev/sdX  # its largest free space
+sudo hos-install                                           # list them and ask
 ```
 
-Wipes the disk (it asks you to type the device name), makes a root
-filesystem (and an EFI system partition when booted from EFI), copies
+Only what you name is touched: a whole disk is wiped and gets a root
+filesystem (and an EFI system partition when booted from EFI); a
+partition is formatted as the root and nothing else on the disk
+changes, with an existing EFI system partition on it reused as it is
+unless you answer yes when asked to format it for a clean start (`-E`
+says yes up front; whatever else boots from it then stops booting), or,
+on a disk that never had one, a 512M one made in its free space;
+`-f` adds a partition in the disk's largest free space. It shows the
+disk and asks you to type the target's name first, then the user and
+both passwords, and after that runs unattended. It copies
 the live root onto it as-is with the packages, `/usr/src/hackable`
 and the enabled services, writes fstab by UUID, removes the live
 user's autologin and sudo, enables xdm (you log in at its greeter),
-creates USER in the same groups, asks for both passwords, builds the
+creates USER in the same groups, sets both passwords, builds the
 initramfs and installs grub with `init=/usr/bin/hsmd`. The installed system boots the same init and the
-same pid 1 as the live one. ~130 lines of sh, no menus; keymap,
+same pid 1 as the live one. Each phase is timed, and the table is
+kept in `/var/log/hos-install.times`. ~300 lines of sh, no menus; keymap,
 timezone and wifi are yours afterwards (`rc.conf`, `/etc/localtime`,
 `nmcli`).
 
