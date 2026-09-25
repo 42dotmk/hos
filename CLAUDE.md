@@ -254,9 +254,21 @@ repository's key), and the four scripts `mkrootfs`, `mkpkg`, `mkiso`,
   store), `hai` (writes `~/.config/hackable/hai.conf`: url, model,
   `keycmd = pass show ENTRY`; shows `haid --check`'s url/model/key),
   `service` (`~/.config/hsm/sv/haid/run` = `exec haid -r` for the
-  session hsmd hwm starts; `hsm rescan` + `hsm check` when it runs).
+  session hsmd hwm starts; `hsm rescan` + `hsm check` when it runs),
+  `voice` (what `hai talk` needs and the ISO cannot carry: `make voice`
+  in /usr/src/hackable/hai for piper and its voice, `make model
+  MODEL=small|large-v3-turbo` in /usr/src/hackable/hstt, then `model =`
+  in `~/.config/hackable/hstt.conf`, since hstt defaults to large; the
+  URLs stay in those makefiles, not here).
   Status before and after, explanations per step, next steps at the
-  end. Tested with stand-ins for sudo/fzf/pgrep/hsm in a scratch HOME.
+  end. Tested with stand-ins for sudo/fzf/pgrep/hsm/make in a scratch
+  HOME (mind gpg's keyboxd: one started for an earlier scratch home
+  answers for the next, and a fresh home then lists the old keys).
+- CI clones every tool from github.com/42dotmk: hai is there too
+  (42dotmk/hai, public, the same history as halicea/hai; the local
+  clone pushes to both remotes, `origin` and `42dotmk`). A tool that
+  exists only elsewhere is silently left out of the release, with just
+  a warning annotation on the run.
 - **sudo under X** asks through hmenu: `SUDO_ASKPASS=/usr/bin/hmenu-askpass`
   (sudo does not search PATH for it) and `alias sudo='sudo -A'` only when
   `$DISPLAY` is set - on a console hmenu cannot show. hmenu's three

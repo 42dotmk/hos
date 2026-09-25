@@ -2,7 +2,7 @@
 # hos-setup - the first things a new hos user sets up, explained as it
 # goes, with where things stand before and what to do next after.
 #
-# usage: hos-setup [timezone|gpg|hai|service]...
+# usage: hos-setup [timezone|gpg|hai|service|voice]...
 #
 #   timezone  picked with fzf from the tz database; TIMEZONE in /etc/rc.conf
 #             (the boot script sets /etc/localtime from it) and applied now
@@ -12,6 +12,9 @@
 #             key read from the password store (keycmd), never written down
 #   service   haid as a session service: ~/.config/hsm/sv/haid, supervised
 #             by the hsmd hwm starts, restarted when it dies
+#   voice     download what hai talk needs, too big for the ISO: piper and
+#             its voice (hai's make voice), a whisper model (hstt's make
+#             model), the model's name in ~/.config/hackable/hstt.conf
 #
 # Without arguments every step runs in that order. Each shows what is
 # there, asks, and skips on an empty answer; run it again any time.
@@ -20,9 +23,12 @@ set -e
 HAICONF=$HOME/.config/hackable/hai.conf
 HAISV=$HOME/.config/hsm/sv/haid
 STORE=${PASSWORD_STORE_DIR:-$HOME/.password-store}
+VOICE=$HOME/.local/share/piper-voices/en_US-lessac-medium.onnx
+MODELS=$HOME/.local/share/hstt
+HSTTCONF=$HOME/.config/hackable/hstt.conf
 
 usage() {
-    echo "usage: hos-setup [timezone|gpg|hai|service]..." >&2
+    echo "usage: hos-setup [timezone|gpg|hai|service|voice]..." >&2
     exit 1
 }
 say() { printf '\n== %s\n' "$*"; }
@@ -58,6 +64,15 @@ hai_url() { sed -n 's/^[[:space:]]*url[[:space:]]*=[[:space:]]*//p' "$HAICONF" 2
 has_hai() { [ -n "$(hai_model)" ]; }
 has_sv() { [ -x "$HAISV/run" ]; }
 haid_runs() { pgrep -x -u "$(id -u)" haid >/dev/null 2>&1; }
+has_piper() { [ -x "$HOME/.local/bin/piper" ] && [ -s "$VOICE" ]; }
+# the whisper models downloaded, by hstt's names for them
+stt_models() {
+    [ -s "$MODELS/ggml-small.bin" ] && printf 'small '
+    [ -s "$MODELS/ggml-large-v3-turbo.bin" ] && printf 'large '
+    return 0
+}
+stt_model() { sed -n 's/^[[:space:]]*model[[:space:]]*=[[:space:]]*//p' "$HSTTCONF" 2>/dev/null | head -1; }
+has_voice() { has_piper && [ -n "$(stt_models)" ]; }
 
 status() {
     t=$(tz_now)
@@ -70,6 +85,8 @@ status() {
         "$(has_hai && echo "$(hai_model) at $(hai_url)" || echo 'no model set')"
     printf '  %s haid      %s\n' "$(mark has_sv)" \
         "$(has_sv && echo 'a session service' || echo 'not a service')$(haid_runs && echo ', running' || true)"
+    printf '  %s voice     %s\n' "$(mark has_voice)" \
+        "piper $(has_piper && echo there || echo missing), whisper model: $(m=$(stt_models); echo "${m:-none}")"
 }
 
 # --- the steps ---------------------------------------------------------------
@@ -209,6 +226,40 @@ step_service() {
     return 0
 }
 
+step_voice() {
+    say "voice: hai talk"
+    about "hai talk (Super+Alt+Space) records you with hstt, which transcribes" \
+        "with whisper on this machine, and hai answers aloud through piper;" \
+        "nothing leaves the machine. Their files are too big for the ISO:" \
+        "piper with an English voice (~85 MB), then a whisper model - small" \
+        "(490 MB, good enough) or large (1.6 GB, best, near realtime on a" \
+        "GPU). They go under ~/.local/share, where hai and hstt look."
+    if has_piper; then
+        echo "piper and its voice: there"
+    elif confirm "download piper and its voice (~85 MB)"; then
+        make -s -C /usr/src/hackable/hai voice
+    fi
+    have=$(stt_models)
+    echo "whisper models here: ${have:-none}"
+    m=$(ask "whisper model to use: small or large (empty skips)" "$(stt_model)")
+    case $m in
+    '') return 0 ;;
+    small) id=small ;;
+    large) id=large-v3-turbo ;;
+    *) echo "not small or large, skipped"; return 0 ;;
+    esac
+    [ -s "$MODELS/ggml-$id.bin" ] || make -s -C /usr/src/hackable/hstt model MODEL=$id
+    # hstt's default is large; name the one chosen in its config
+    mkdir -p "${HSTTCONF%/*}"
+    if grep -q '^[[:space:]]*model[[:space:]]*=' "$HSTTCONF" 2>/dev/null; then
+        sed -i "s|^[[:space:]]*model[[:space:]]*=.*|model = $m|" "$HSTTCONF"
+    else
+        echo "model = $m" >> "$HSTTCONF"
+    fi
+    echo "hstt uses the $m model ($HSTTCONF)"
+    return 0
+}
+
 # --- what to do next ---------------------------------------------------------
 
 next() {
@@ -225,17 +276,22 @@ next() {
         echo "  hai say hello        one question; plain 'hai' opens the conversation"
         echo "  Ctrl-O in the shell  sends the line you typed to hai"
         has_sv && echo "  hsm status           haid's state; hsm down haid stops it"
+        if has_voice; then
+            echo "  Super+Alt+Space      talk to hai; again to stop, it answers aloud"
+        else
+            echo "  hos-setup voice      to talk to hai (downloads piper and a whisper model)"
+        fi
     else
         echo "  hos-setup hai        to give hai a model"
     fi
-    echo "  hos-setup STEP       redoes one step: timezone, gpg, hai, service"
+    echo "  hos-setup STEP       redoes one step: timezone, gpg, hai, service, voice"
 }
 
 [ "$(id -u)" -ne 0 ] || { echo "hos-setup: run it as yourself, not root (it uses sudo where it must)" >&2; exit 1; }
 for s in "$@"; do
-    case $s in timezone | gpg | hai | service) ;; *) usage ;; esac
+    case $s in timezone | gpg | hai | service | voice) ;; *) usage ;; esac
 done
-[ $# -gt 0 ] || set -- timezone gpg hai service
+[ $# -gt 0 ] || set -- timezone gpg hai service voice
 echo "hos setup, for $(id -un). Where things stand:"
 status
 for s; do

@@ -291,8 +291,11 @@ step explained, skippable and redoable (`hos-setup hai`): the timezone
 (saved in `rc.conf`), your gpg secret key imported and trusted so `pass`
 works, your password store cloned, hai's model with its API key read
 from the store (`keycmd = pass show ENTRY`, never written to the file),
-and haid as a session service under hsm. It starts and ends with where
-things stand, and ends with what to try next.
+haid as a session service under hsm, and the voice: piper with an
+English voice and a whisper model (small, 490 MB, or large, 1.6 GB),
+downloaded because they are too big for the ISO, so Super+Alt+Space
+talks to hai with nothing leaving the machine. It starts and ends with
+where things stand, and ends with what to try next.
 
 ## Layout
 
