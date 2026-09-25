@@ -228,7 +228,11 @@ class Machine:
                     sh("cp", OVMF_VARS, f"{disk}.vars")
                 cmd += ["-drive", f"if=pflash,format=raw,file={disk}.vars"]
         if iso:
-            cmd += ["-cdrom", iso]
+            # on AHCI, as real machines have it: with OVMF keeping NVRAM,
+            # the default PIIX PATA cd never answers Linux's probe
+            cmd += ["-device", "ahci,id=ahci",
+                    "-drive", f"file={iso},media=cdrom,if=none,id=cd,readonly=on",
+                    "-device", "ide-cd,drive=cd,bus=ahci.0"]
         if disk:
             cmd += ["-drive", f"file={disk},if=virtio,format=raw"]
         if kernel:
@@ -243,7 +247,9 @@ class Machine:
 
     def shell(self):
         """wait for agetty's autologin, then give the shell a prompt we can find"""
-        self.ser.expect(r"automatic login", 300)
+        # agetty's line can come interleaved with hsmd's, so the root
+        # shell's own prompt counts too
+        self.ser.expect(r"automatic login|-bash-[0-9.]+# ", 300)
         end = time.time() + 60
         while time.time() < end:
             self.ser.send("\nPS1='HOS''P> '\n")  # the echo must not match the prompt
