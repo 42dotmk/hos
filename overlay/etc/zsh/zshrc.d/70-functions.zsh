@@ -15,7 +15,7 @@ later() {
 # pick a branch with fzf; remote ones get a tracking branch
 fzf_git_branch() {
     git rev-parse HEAD >/dev/null 2>&1 || return
-    git branch -a -vv --color=always | fzf --height 40% --ansi --tac \
+    git branch -a -vv --color=always | fzf --height 40% --ansi --multi --tac \
         | sed 's/^..//' | awk '{print $1}'
 }
 fzf_git_checkout() {

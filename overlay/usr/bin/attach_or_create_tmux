@@ -1,0 +1,7 @@
+#!/bin/sh
+# attach to the running tmux server, or start one with a "general" session
+if pgrep tmux >/dev/null; then
+   tmux attach
+else
+   tmux new -s general
+fi

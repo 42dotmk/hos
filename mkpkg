@@ -82,6 +82,9 @@ layout() {
     case $p in
     hed) make -s -C "$src" install BUILD_DIR=build/hos PREFIX=/usr MAN_DIR=/usr/share/man DESTDIR="$dest" >/dev/null ;;
     hsm) bin hsmd hsm ;;
+    # the item sources outside the binary: hmenu xbps runs hmenu-xbps,
+    # hmenu pass hmenu-pass, and hmenu-askpass is sudo -A's askpass
+    hmenu) bin hmenu hmenu-xbps hmenu-pass hmenu-askpass ;;
     hai)
         bin haid hai
         for f in "$src"/skills/*.md; do install -Dm644 "$f" "$dest/usr/share/hai/skills/${f##*/}"; done

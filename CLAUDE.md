@@ -189,11 +189,20 @@ repository's key), and the four scripts `mkrootfs`, `mkpkg`, `mkiso`,
   `/run/user/UID` and `XDG_RUNTIME_DIR`, which pipewire needs.
 - **Shell and tmux defaults are system-wide**, not in skel: zsh reads
   `overlay/etc/zsh/zshrc`, which sources `zshrc.d/*.zsh` (options,
-  completion + fzf bindings, keys, prompt with vcs_info, env, aliases,
-  git aliases, functions, autosuggestions/highlighting last), before
-  `~/.zshrc`; tmux reads `overlay/etc/tmux.conf` before the user's. Both
-  are stripped from the author's dotfiles and reference only what is in
-  `PACKAGES` (fzf, ripgrep, xclip, pass, yazi, hed) — keep it that way.
+  completion + fzf bindings, keys, prompt, env with the toolchain PATHs
+  and fasd, aliases, git aliases, functions, hai's keys,
+  autosuggestions/highlighting last), before `~/.zshrc`; tmux reads
+  `overlay/etc/tmux.conf` before the user's. The zsh side is the
+  author's shared dotfiles (`~/.dotfiles/zsh`, never its untracked
+  `personal/`) merged into those files, not shipped beside them: sync
+  by merging again. Aliases lean on `PACKAGES` (bat, eza, xsel, fzf,
+  ripgrep, pass, tmux, hed) and the vendored `overlay/usr/bin/fasd`
+  (MIT, Void has no package); one for a tool hos does not ship is
+  guarded with `$+commands[...]`, so it appears once the tool is
+  installed and never breaks the command it shadows. hos sets
+  `extended_glob`, so key names in `bindkey` must be quoted (an unquoted
+  `^o` is a glob). `/etc/zsh/completions` (`_pass`) goes ahead of the
+  packaged completions.
 - **hos-install** (`overlay/usr/bin`, ~250 lines of sh, no menus):
   the target is a whole disk (wiped: sfdisk gpt + ESP under EFI, dos
   otherwise), a partition (only it is formatted), or `-f DISK` (a
@@ -236,6 +245,23 @@ repository's key), and the four scripts `mkrootfs`, `mkpkg`, `mkiso`,
   on one core) and the init mounts it `threads=percpu` (falling back to
   a plain mount). The initramfs rebuild is ~2 s and not worth reusing
   the ISO's.
+- **hos-setup** (`overlay/usr/bin`, sh, run by the user after the
+  first login; hos-install's last line says so): `timezone` (fzf over
+  zone1970.tab; `TIMEZONE=` in `/etc/rc.conf`, which the boot script
+  turns into `/etc/localtime`, plus the link now), `gpg` (import a
+  secret key file, ownertrust 6 on each primary fingerprint - pass
+  cannot encrypt to an untrusted key - then `git clone` the password
+  store), `hai` (writes `~/.config/hackable/hai.conf`: url, model,
+  `keycmd = pass show ENTRY`; shows `haid --check`'s url/model/key),
+  `service` (`~/.config/hsm/sv/haid/run` = `exec haid -r` for the
+  session hsmd hwm starts; `hsm rescan` + `hsm check` when it runs).
+  Status before and after, explanations per step, next steps at the
+  end. Tested with stand-ins for sudo/fzf/pgrep/hsm in a scratch HOME.
+- **sudo under X** asks through hmenu: `SUDO_ASKPASS=/usr/bin/hmenu-askpass`
+  (sudo does not search PATH for it) and `alias sudo='sudo -A'` only when
+  `$DISPLAY` is set - on a console hmenu cannot show. hmenu's three
+  scripts (`hmenu-xbps` for Cmd+I, `hmenu-pass`, `hmenu-askpass`) are
+  packaged beside the binary by mkpkg; without them Cmd+I listed nothing.
 - Branding: `overlay/etc/os-release` and `overlay/etc/issue`; fastfetch
   reads `ID=hos` but has no logo for it, so
   `overlay/etc/fastfetch/config.jsonc` points it at

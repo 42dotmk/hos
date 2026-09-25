@@ -1,5 +1,6 @@
 bindkey -e
 bindkey '^I' expand-or-complete
+bindkey '^R' history-incremental-search-backward   # over fzf's ctrl-r
 bindkey '^[[A' history-beginning-search-backward   # up: prefix history
 bindkey '^[[B' history-beginning-search-forward
 bindkey '^[[H' beginning-of-line                   # home/end/delete

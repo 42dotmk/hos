@@ -1,0 +1,246 @@
+#!/bin/sh
+# hos-setup - the first things a new hos user sets up, explained as it
+# goes, with where things stand before and what to do next after.
+#
+# usage: hos-setup [timezone|gpg|hai|service]...
+#
+#   timezone  picked with fzf from the tz database; TIMEZONE in /etc/rc.conf
+#             (the boot script sets /etc/localtime from it) and applied now
+#   gpg       import your secret keys, trust them (pass cannot encrypt to a
+#             key gpg does not trust), and clone your password store
+#   hai       the model hai talks to: ~/.config/hackable/hai.conf, its API
+#             key read from the password store (keycmd), never written down
+#   service   haid as a session service: ~/.config/hsm/sv/haid, supervised
+#             by the hsmd hwm starts, restarted when it dies
+#
+# Without arguments every step runs in that order. Each shows what is
+# there, asks, and skips on an empty answer; run it again any time.
+set -e
+
+HAICONF=$HOME/.config/hackable/hai.conf
+HAISV=$HOME/.config/hsm/sv/haid
+STORE=${PASSWORD_STORE_DIR:-$HOME/.password-store}
+
+usage() {
+    echo "usage: hos-setup [timezone|gpg|hai|service]..." >&2
+    exit 1
+}
+say() { printf '\n== %s\n' "$*"; }
+# indented explanation text
+about() { printf '%s\n' "$@" | sed 's/^/   /'; echo; }
+# PROMPT [DEFAULT]: the answer on stdout
+ask() {
+    if [ -n "${2:-}" ]; then
+        printf '%s [%s]: ' "$1" "$2" >&2
+    else
+        printf '%s: ' "$1" >&2
+    fi
+    read -r answer || answer=
+    printf '%s' "${answer:-${2:-}}"
+}
+confirm() {
+    printf '%s [y/N] ' "$1" >&2
+    read -r answer || answer=
+    case $answer in [yY]*) return 0 ;; esac
+    return 1
+}
+mark() { if "$@"; then printf '✓'; else printf '✗'; fi; }
+
+# --- where things stand ------------------------------------------------------
+
+tz_now() { readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||'; }
+tz_saved() { grep -q '^TIMEZONE=' /etc/rc.conf 2>/dev/null; }
+gpg_keys() { gpg --list-secret-keys --with-colons 2>/dev/null | grep -c '^sec' || true; }
+has_keys() { [ "$(gpg_keys)" -gt 0 ]; }
+has_store() { [ -f "$STORE/.gpg-id" ]; }
+hai_model() { sed -n 's/^[[:space:]]*model[[:space:]]*=[[:space:]]*//p' "$HAICONF" 2>/dev/null | head -1; }
+hai_url() { sed -n 's/^[[:space:]]*url[[:space:]]*=[[:space:]]*//p' "$HAICONF" 2>/dev/null | head -1; }
+has_hai() { [ -n "$(hai_model)" ]; }
+has_sv() { [ -x "$HAISV/run" ]; }
+haid_runs() { pgrep -x -u "$(id -u)" haid >/dev/null 2>&1; }
+
+status() {
+    t=$(tz_now)
+    printf '  %s timezone  %s\n' "$(mark tz_saved)" \
+        "${t:-UTC}$(tz_saved || echo ' (not saved: lost at reboot)')"
+    printf '  %s gpg       %s secret key(s)\n' "$(mark has_keys)" "$(gpg_keys)"
+    printf '  %s pass      %s\n' "$(mark has_store)" \
+        "$(has_store && echo "store in $STORE" || echo 'no password store')"
+    printf '  %s hai       %s\n' "$(mark has_hai)" \
+        "$(has_hai && echo "$(hai_model) at $(hai_url)" || echo 'no model set')"
+    printf '  %s haid      %s\n' "$(mark has_sv)" \
+        "$(has_sv && echo 'a session service' || echo 'not a service')$(haid_runs && echo ', running' || true)"
+}
+
+# --- the steps ---------------------------------------------------------------
+
+step_timezone() {
+    say timezone
+    about "The clock shows local time from this. It is saved as TIMEZONE in" \
+        "/etc/rc.conf, which the boot script reads, and applied right away." \
+        "Type to filter the list (e.g. skopje), Enter picks, Esc keeps it."
+    now=$(tz_now)
+    echo "now: ${now:-UTC}"
+    tz=$({ echo UTC; awk '!/^#/ { print $3 }' /usr/share/zoneinfo/zone1970.tab | sort; } |
+        fzf --prompt 'timezone> ' --height 40% --reverse) || true
+    if [ -z "$tz" ] || { [ "$tz" = "$now" ] && tz_saved; }; then
+        echo "kept"
+        return 0
+    fi
+    if grep -q '^#*TIMEZONE=' /etc/rc.conf; then
+        sudo sed -i "s|^#*TIMEZONE=.*|TIMEZONE=$tz|" /etc/rc.conf
+    else
+        echo "TIMEZONE=$tz" | sudo tee -a /etc/rc.conf >/dev/null
+    fi
+    sudo ln -sf "/usr/share/zoneinfo/$tz" /etc/localtime
+    echo "timezone: $tz, $(date +%H:%M) there now"
+}
+
+step_gpg() {
+    say "gpg keys, for pass"
+    about "pass keeps each password as a file encrypted to your gpg key, so" \
+        "it needs your secret key here. On the machine that has it:" \
+        "  gpg --export-secret-keys --armor YOU@MAIL > key.asc" \
+        "and bring key.asc over (a stick, scp); delete it once imported." \
+        "Your own keys are then marked as trusted, or pass refuses them."
+    have=$(gpg --list-secret-keys --with-colons 2>/dev/null | awk -F: '$1 == "uid" { print "  " $10 }')
+    [ -n "$have" ] && printf 'secret keys here:\n%s\n' "$have"
+    f=$(ask "secret key file to import (empty skips)")
+    if [ -n "$f" ]; then
+        case $f in "~/"*) f=$HOME/${f#"~/"} ;; esac
+        if [ -r "$f" ]; then
+            gpg --import "$f"
+            # your own keys, trusted ultimately: the primary key's
+            # fingerprint is the fpr line right after its sec/pub line
+            gpg --with-colons --import-options show-only --import "$f" 2>/dev/null |
+                awk -F: '$1 == "sec" || $1 == "pub" { want = 1; next }
+                         $1 == "fpr" && want { print $10 ":6:"; want = 0 }' |
+                gpg --import-ownertrust
+        else
+            echo "cannot read $f, skipped"
+        fi
+    fi
+    if has_store; then
+        echo "password store: $STORE is there"
+        return 0
+    fi
+    echo
+    about "The password store itself is usually a git repository. An ssh URL" \
+        "(git@...) needs your ssh key in ~/.ssh first; https works as is."
+    url=$(ask "password store git repository to clone (empty skips)")
+    [ -n "$url" ] && git clone "$url" "$STORE"
+    return 0
+}
+
+step_hai() {
+    say "hai: the model"
+    about "hai talks to any OpenAI-compatible endpoint. A local ollama needs no" \
+        "key; for the others the key stays in your password store and hai" \
+        "reads it with 'pass show ENTRY' when it starts, so it is never" \
+        "written into the config. More models go in [model NAME] sections" \
+        "of the file later: /usr/src/hackable/hai/README.md explains them."
+    if [ -f "$HAICONF" ]; then
+        echo "now: $(hai_model) at $(hai_url)"
+        confirm "replace it (the old one is kept as hai.conf.bak)" || return 0
+    fi
+    echo "endpoint: 1 ollama on this machine, 2 openai, 3 openrouter,"
+    echo "          4 anthropic, 5 deepseek, or type its URL"
+    e=$(ask "endpoint" 1)
+    dm= local=
+    case $e in
+    1) url=http://localhost:11434/v1 dm=qwen3:8b local=1 ;;
+    2) url=https://api.openai.com/v1 ;;
+    3) url=https://openrouter.ai/api/v1 ;;
+    4) url=https://api.anthropic.com/v1 dm=claude-sonnet-5 ;;
+    5) url=https://api.deepseek.com/v1 dm=deepseek-chat ;;
+    *) url=$e ;;
+    esac
+    model=$(ask "model id" "$dm")
+    [ -n "$model" ] || { echo "no model, skipped"; return 0; }
+    entry=
+    if [ -z "$local" ]; then
+        entry=$(ask "its API key's pass entry (e.g. api/openai; empty: set HAI_API_KEY yourself)")
+        if [ -n "$entry" ] && has_store && [ ! -f "$STORE/$entry.gpg" ]; then
+            echo "(no $entry in the password store yet: 'pass insert $entry' adds it)"
+        fi
+    fi
+    mkdir -p "${HAICONF%/*}"
+    [ -f "$HAICONF" ] && cp "$HAICONF" "$HAICONF.bak"
+    {
+        echo "url = $url"
+        echo "model = $model"
+        [ -n "$entry" ] && echo "keycmd = pass show $entry"
+    } > "$HAICONF"
+    echo "wrote $HAICONF"
+    # what haid will use; "key: set" means the pass entry decrypted
+    if check=$(haid --check 2>&1); then
+        printf '%s\n' "$check" | grep -E '^(url|model|key):' | sed 's/^/  /'
+    else
+        printf '%s\n' "$check"
+        echo "(haid --check failed; the file is in place)"
+    fi
+    return 0
+}
+
+step_service() {
+    say "haid as a session service"
+    about "haid is hai's daemon: it holds the conversation, reads its mail and" \
+        "runs the tools. As a service it starts with your X session (hwm runs" \
+        "hsmd, which supervises ~/.config/hsm/sv) and restarts if it dies;" \
+        "otherwise the first 'hai' starts it."
+    if has_sv; then
+        echo "already one: $HAISV"
+        return 0
+    fi
+    haid_runs && echo "(a haid runs already, outside hsm: stop it, or there are two)"
+    confirm "run haid as a service" || return 0
+    mkdir -p "$HAISV"
+    printf '#!/bin/sh\n# -r: resume the newest conversation after every restart\nexec haid -r\n' > "$HAISV/run"
+    chmod 755 "$HAISV/run"
+    if pgrep -x -u "$(id -u)" hsmd >/dev/null 2>&1; then
+        if hsm rescan && hsm check haid; then
+            echo "haid runs"
+        else
+            echo "haid did not come up: hsm status, and its log in $HAISV/log"
+        fi
+    else
+        echo "no session hsmd: haid starts with the next X session (hwm runs hsmd)"
+    fi
+    return 0
+}
+
+# --- what to do next ---------------------------------------------------------
+
+next() {
+    say "next"
+    if has_store; then
+        echo "  pass ls              your passwords; p NAME copies one (45 s)"
+    elif has_keys; then
+        echo "  pass init $(gpg --list-secret-keys --with-colons | awk -F: '$1 == "fpr" { print $10; exit }')"
+        echo "                       starts a new password store on your key"
+    else
+        echo "  hos-setup gpg        when you have your key file at hand"
+    fi
+    if has_hai; then
+        echo "  hai say hello        one question; plain 'hai' opens the conversation"
+        echo "  Ctrl-O in the shell  sends the line you typed to hai"
+        has_sv && echo "  hsm status           haid's state; hsm down haid stops it"
+    else
+        echo "  hos-setup hai        to give hai a model"
+    fi
+    echo "  hos-setup STEP       redoes one step: timezone, gpg, hai, service"
+}
+
+[ "$(id -u)" -ne 0 ] || { echo "hos-setup: run it as yourself, not root (it uses sudo where it must)" >&2; exit 1; }
+for s in "$@"; do
+    case $s in timezone | gpg | hai | service) ;; *) usage ;; esac
+done
+[ $# -gt 0 ] || set -- timezone gpg hai service
+echo "hos setup, for $(id -un). Where things stand:"
+status
+for s; do
+    "step_$s"
+done
+say "now"
+status
+next

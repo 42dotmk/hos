@@ -283,9 +283,16 @@ user's autologin and sudo, enables xdm (you log in at its greeter),
 creates USER in the same groups, sets both passwords, builds the
 initramfs and installs grub with `init=/usr/bin/hsmd`. The installed system boots the same init and the
 same pid 1 as the live one. Each phase is timed, and the table is
-kept in `/var/log/hos-install.times`. ~300 lines of sh, no menus; keymap,
-timezone and wifi are yours afterwards (`rc.conf`, `/etc/localtime`,
-`nmcli`).
+kept in `/var/log/hos-install.times`. ~300 lines of sh, no menus; keymap and
+wifi are yours afterwards (`rc.conf`, `nmcli`).
+
+After the first login, `hos-setup` in a terminal does the rest, each
+step explained, skippable and redoable (`hos-setup hai`): the timezone
+(saved in `rc.conf`), your gpg secret key imported and trusted so `pass`
+works, your password store cloned, hai's model with its API key read
+from the store (`keycmd = pass show ENTRY`, never written to the file),
+and haid as a session service under hsm. It starts and ends with where
+things stand, and ends with what to try next.
 
 ## Layout
 

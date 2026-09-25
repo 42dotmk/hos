@@ -344,4 +344,5 @@ printf 'hos-install on %s, %s\n%s  %-22s %6ss\n' "$rootdev" "$(date)" "$times" t
     > "$target/var/log/hos-install.times"
 umount -R "$target"
 printf '%s' "$times"
-echo "== done in ${total}s: hos is on $rootdev. reboot, log in as $user at the xdm greeter, hwm starts."
+echo "== done in ${total}s: hos is on $rootdev. reboot, log in as $user at the xdm greeter, hwm starts;"
+echo "   then run hos-setup in a terminal: timezone, gpg keys for pass, hai's model, haid as a service."

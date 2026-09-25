@@ -139,6 +139,13 @@ xclip
 # file manager in the terminal (uses fzf/ripgrep above when present)
 yazi
 
+# what the shell's aliases (/etc/zsh/zshrc.d/60-aliases.zsh) lean on: cat
+# is bat, the l* listings eza, pbcopy/pbpaste xsel. fasd is vendored in
+# overlay/usr/bin, Void does not package it.
+bat
+eza
+xsel
+
 # headers for rebuilding every tool on the running system
 libX11-devel
 libXrandr-devel
